@@ -1,0 +1,13 @@
+blackspot_id,highway_no,chainage_from,chainage_to,district,landmark,status,source,source_url,gps_verified
+TN-(06)-191,NH-44,Km 57+300,Km 58+400,Krishnagiri,"Sappadi Junction (Km 57+650)","Long-term rectification (VUP construction)",NHAI PIU Road Safety MIS Report,https://nhai.gov.in,FALSE
+TN-(02)-078,NH-44,Km 43+400,Km 43+900,Krishnagiri,Hosur New Bus Stand entry and exit,"Permanent rectification (Grade separation / Flyovers and SVUP)",NHAI Regional Office Chennai,https://nhai.gov.in,FALSE
+TN-(02)-328,NH-44,Km 80+665,Km 82+250,Krishnagiri,"Puliyasimedu Junction (Km 81+250)","Permanent rectification (Service road and FOB under EPC)",NHAI Road Safety Cell,https://nhai.gov.in,FALSE
+TN-(02)-643,NH-44,Km 87+700,Km 87+700,Krishnagiri,"Toll Plaza / Gurubarapalli area (Km 87+700)","Safety intervention (Foot Over Bridge construction)",NHAI Project Status Report,https://nhai.gov.in,FALSE
+TN-(02)-115,NH-44,Km 80+200,Km 80+200,Krishnagiri,Sikkaraimedu Junction,"Permanent rectification (Vehicular Underpass 20m x 5.5m)",NHAI E-Procurement Tender,https://etenders.gov.in/eprocure/app,FALSE
+TN-(05)-050,NH-45,Km 173+320,Km 173+320,Villupuram,Perangiyur Junction,"Permanent rectification (Vehicular Underpass 1x12x5.5m)","NHAI Project Status Report (FY 2019-21)",https://nhai.gov.in,FALSE
+TN-(05)-091,NH-45,Km 185+910,Km 185+910,Cuddalore,Gedilam Junction,"Civil works rectification (FY 2019-21)",NHAI Technical Audit & Civil Works Schedule,https://nhai.gov.in,FALSE
+TN-(03)-308,NH-48,UNAVAILABLE,UNAVAILABLE,Tirupathur,Patchur Toll Gate Junction,"Long-term rectification (Junction improvement / underpass)",NHAI Status Report on Road Safety Tenders,https://nhai.gov.in,FALSE
+TN-071-03,NH-45B,Km 47+600,Km 47+600,Madurai,Soriyampatti,Black spot elimination project,NHAI Project Status Report,https://nhai.gov.in,FALSE
+TN-03-300,NH-44,Km 208+900,Km 208+900,Thoothukudi,Kayathar Section,"Permanent rectification (VUP and Service Roads, Tender 2026_NHAI_292768_1)",NHAI Central Public Procurement Portal,https://etenders.gov.in/eprocure/app,FALSE
+TN-02-287,NH-44,Km 349+770,Km 349+770,Namakkal,"Km 349.770 Junction (Namakkal/Karur section)","Permanent rectification (6-lane Vehicular Underpass)",NHAI Civil Project Award Notification,https://nhai.gov.in,FALSE
+TN-NH44-THOPPUR,NH-44,Km 158+500,Km 165+100,Dharmapuri,"Thoppur Ghat Section (Double 'S' curve)","High-Fatality Black Corridor (Elevated Highway Realignment)",MoRTH & NHAI Standing Committee on Road Safety / Sansad Q&A,https://sansad.in,FALSE
