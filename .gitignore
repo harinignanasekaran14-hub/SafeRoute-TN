@@ -46,3 +46,35 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Environment variables and API secrets
+.env
+.env.*
+!.env.example
+# Python virtual environment
+.venv/
+venv/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary development files
+scratch/
+git_main_temp.dart
+scratch_user_prompt.txt
+
+
+# Local screenshots and preview captures
+dashboard_*.png
+screenshot_*.png
+
+# Local backup copies - retain locally, do not publish
+**/*backup*.dart
+**/*backup*.py
+/ersELCOTDesktopsaferoute_tn.venvScriptsactivate.bat
+lib/main_recovered.dart
+
+# Unused previous image
+assets/images/plan_journey_bg_prev.jpg

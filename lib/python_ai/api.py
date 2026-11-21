@@ -1,10 +1,13 @@
 import os
+import time
+import re
 import json
 import math
 import gzip
 import struct
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -442,24 +445,37 @@ def _route_tile_coordinates(route_points, zoom):
     world_tiles = 2 ** zoom
     tiles = set()
 
-    for latitude, longitude in route_points:
-        if not (-85.05112878 < latitude < 85.05112878):
-            continue
-
-        x = (longitude + 180.0) / 360.0 * world_tiles
-
-        latitude_radians = math.radians(latitude)
+    def _point_to_tile(lat, lon):
+        if not (-85.05112878 < lat < 85.05112878):
+            return None
+        x = (lon + 180.0) / 360.0 * world_tiles
+        lat_rad = math.radians(lat)
         y = (
-            1.0
-            - math.asinh(math.tan(latitude_radians)) / math.pi
+            1.0 - math.asinh(math.tan(lat_rad)) / math.pi
         ) / 2.0 * world_tiles
+        tx = int(math.floor(x))
+        ty = int(math.floor(y))
+        if 0 <= tx < world_tiles and 0 <= ty < world_tiles:
+            return (tx, ty)
+        return None
 
-        tile_x = int(math.floor(x))
-        tile_y = int(math.floor(y))
-
-        # Keep coordinates strictly inside TomTom's valid tile range.
-        if 0 <= tile_x < world_tiles and 0 <= tile_y < world_tiles:
-            tiles.add((tile_x, tile_y))
+    for i in range(len(route_points)):
+        pt = route_points[i]
+        tile = _point_to_tile(pt[0], pt[1])
+        if tile:
+            tiles.add(tile)
+        if i < len(route_points) - 1:
+            next_pt = route_points[i + 1]
+            dist = haversine_distance(pt[0], pt[1], next_pt[0], next_pt[1])
+            if dist > 2500.0:
+                steps = min(50, math.ceil(dist / 2000.0))
+                for step in range(1, steps):
+                    frac = step / steps
+                    interp_lat = pt[0] + (next_pt[0] - pt[0]) * frac
+                    interp_lon = pt[1] + (next_pt[1] - pt[1]) * frac
+                    interp_tile = _point_to_tile(interp_lat, interp_lon)
+                    if interp_tile:
+                        tiles.add(interp_tile)
 
     return sorted(tiles)
 
@@ -467,6 +483,7 @@ def fetch_tomtom_traffic_tile(tile, api_key):
     zoom, tile_x, tile_y = tile
     query = urllib.parse.urlencode(
         {
+            "key": api_key,
             "apiVersion": "2",
             "attributes": "tags(relative_speed,road_closure)",
         }
@@ -501,8 +518,14 @@ def fetch_tomtom_traffic_tile(tile, api_key):
     except urllib.error.HTTPError as error:
         if error.code in (204, 404):
             return []
+        if error.code in (401, 403):
+            return {"http_status": error.code, "reason": "provider_auth_error"}
+        if error.code == 429:
+            return {"http_status": 429, "reason": "rate_limited"}
         return {"http_status": error.code}
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError, struct.error):
+    except (urllib.error.URLError, TimeoutError):
+        return {"http_status": 504, "reason": "timeout"}
+    except (ValueError, OSError, struct.error):
         return []
 
 def _route_samples(
@@ -599,7 +622,7 @@ def _match_route_samples(samples, features):
     if not features:
         return None, "no_route_match"
 
-    cell_size = 50.0
+    cell_size = 150.0
     feature_grid = {}
     for feature_index, feature in enumerate(features):
         points = [point for path in feature["paths"] for point in path]
@@ -609,17 +632,25 @@ def _match_route_samples(samples, features):
         maximum_x = max(point[0] for point in points)
         minimum_y = min(point[1] for point in points)
         maximum_y = max(point[1] for point in points)
-        for cell_x in range(
-            math.floor(minimum_x / cell_size),
-            math.floor(maximum_x / cell_size) + 1,
-        ):
-            for cell_y in range(
-                math.floor(minimum_y / cell_size),
-                math.floor(maximum_y / cell_size) + 1,
-            ):
-                feature_grid.setdefault((cell_x, cell_y), set()).add(feature_index)
+        min_cx = math.floor(minimum_x / cell_size)
+        max_cx = math.floor(maximum_x / cell_size)
+        min_cy = math.floor(minimum_y / cell_size)
+        max_cy = math.floor(maximum_y / cell_size)
+
+        # Protect against unbounded cell ranges for very long features
+        if (max_cx - min_cx + 1) * (max_cy - min_cy + 1) > 400:
+            for path in feature["paths"]:
+                for pt in path:
+                    cx = math.floor(pt[0] / cell_size)
+                    cy = math.floor(pt[1] / cell_size)
+                    feature_grid.setdefault((cx, cy), set()).add(feature_index)
+        else:
+            for cell_x in range(min_cx, max_cx + 1):
+                for cell_y in range(min_cy, max_cy + 1):
+                    feature_grid.setdefault((cell_x, cell_y), set()).add(feature_index)
 
     observations = []
+    MAX_ROUTE_MATCH_DISTANCE_METERS = 60.0  # Dual-carriageway divided highway tolerance
     for point_x, point_y, latitude in samples:
         center_x = math.floor(point_x / cell_size)
         center_y = math.floor(point_y / cell_size)
@@ -628,9 +659,8 @@ def _match_route_samples(samples, features):
             for cell_y in range(center_y - 1, center_y + 2):
                 candidate_indexes.update(feature_grid.get((cell_x, cell_y), ()))
 
-        match_radius = MAX_ROUTE_MATCH_DISTANCE_METERS / math.cos(
-            math.radians(latitude)
-        )
+        cos_lat = max(0.1, math.cos(math.radians(latitude)))
+        match_radius = MAX_ROUTE_MATCH_DISTANCE_METERS / cos_lat
         nearby = []
         for feature_index in candidate_indexes:
             feature = features[feature_index]
@@ -642,6 +672,7 @@ def _match_route_samples(samples, features):
         nearby.sort(key=lambda result: result[0])
         closest_distance, closest_feature = nearby[0]
         observations.append(closest_feature)
+
     if not observations:
         return None, "no_route_match"
     return observations, None
@@ -650,8 +681,6 @@ def _match_route_samples(samples, features):
 def assess_route_traffic(route_points, api_key):
     samples = _route_samples(route_points)
     tiles = _route_tile_coordinates(route_points, TRAFFIC_TILE_ZOOM)
-    print("TRAFFIC INTERNAL SAMPLES:", len(samples) if samples is not None else None)
-    print("TRAFFIC INTERNAL TILES:", len(tiles) if tiles is not None else None)
     if samples is None or tiles is None:
         return None, "invalid_route_geometry"
     if not tiles or len(tiles) > MAX_TRAFFIC_TILES:
@@ -675,6 +704,18 @@ def assess_route_traffic(route_points, api_key):
     ):
         return None, "rate_limited"
 
+    if any(
+        isinstance(result, dict) and result.get("http_status") in (401, 403)
+        for result in tile_results
+    ):
+        return None, "provider_auth_error"
+
+    if any(
+        isinstance(result, dict) and result.get("http_status") in (408, 504)
+        for result in tile_results
+    ):
+        return None, "timeout"
+
     features = [feature for tile in tile_results if isinstance(tile, list) for feature in tile]
     if not features:
         return None, "provider_unavailable"
@@ -691,22 +732,62 @@ def assess_route_traffic(route_points, api_key):
     )
     if road_closure or mean_speed_ratio < 0.5:
         status = "High Traffic"
+        congestion_level = "High"
+        traffic_score = 0.0 if road_closure else round(mean_speed_ratio * 100.0, 1)
     elif mean_speed_ratio < 0.8:
         status = "Moderate Traffic"
+        congestion_level = "Moderate"
+        traffic_score = round(mean_speed_ratio * 100.0, 1)
     else:
         status = "Low Traffic"
+        congestion_level = "Low"
+        traffic_score = round(mean_speed_ratio * 100.0, 1)
 
     coverage_percent = max(1, round(100.0 * len(observations) / len(samples)))
+    unmonitored_samples = max(0, len(samples) - len(observations))
+    unmonitored_percent = max(0, 100 - coverage_percent)
+    is_partial_coverage = coverage_percent < 90
+    if is_partial_coverage:
+        status_description = (
+            f"{status} on monitored segments "
+            f"({coverage_percent}% covered, {unmonitored_percent}% unmonitored)"
+        )
+    else:
+        status_description = f"{status} ({coverage_percent}% coverage)"
 
     return {
         "available": True,
         "source": TOMTOM_TRAFFIC_SOURCE,
         "status": status,
+        "statusDescription": status_description,
+        "status_description": status_description,
+        "congestionLevel": congestion_level,
+        "congestion_level": congestion_level,
+        "trafficScore": traffic_score,
+        "traffic_score": traffic_score,
+        "speedRatio": round(float(mean_speed_ratio), 3),
         "mean_speed_ratio": float(mean_speed_ratio),
+        "sampleCount": int(len(samples)),
         "sample_count": int(len(samples)),
+        "matchedSamples": int(len(observations)),
         "matched_samples": int(len(observations)),
+        "unmonitoredSamples": int(unmonitored_samples),
+        "unmonitored_samples": int(unmonitored_samples),
+        "coveragePercentage": int(coverage_percent),
         "coverage_percent": int(coverage_percent),
+        "unmonitoredPercentage": int(unmonitored_percent),
+        "unmonitored_percent": int(unmonitored_percent),
+        "isPartialCoverage": bool(is_partial_coverage),
+        "is_partial_coverage": bool(is_partial_coverage),
+        "roadClosure": bool(road_closure),
         "road_closure": bool(road_closure),
+        "closures": 1 if road_closure else 0,
+        "incidents": 1 if road_closure else 0,
+        "fetchedAt": datetime.now(timezone.utc).isoformat(),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "providerObservationAge": "unavailable",
+        "provider_observation_age": "unavailable",
+        "freshness": "Fetched just now (provider age unavailable)",
     }, None
 
 
@@ -714,6 +795,10 @@ def assess_route_traffic(route_points, api_key):
 def route_traffic():
     if request.method == "OPTIONS":
         return jsonify({"status": "ok"})
+
+    # Ensure environment variables are fresh from .env if not yet loaded
+    if not os.environ.get("TOMTOM_API_KEY"):
+        _load_env_file()
     api_key = os.environ.get("TOMTOM_API_KEY", "").strip()
     if not api_key:
         return jsonify({
@@ -724,12 +809,24 @@ def route_traffic():
         }), 503
 
     payload = request.get_json(silent=True)
-    route_points = payload.get("points") if isinstance(payload, dict) else None
-    if (
-        not isinstance(route_points, list)
-        or len(route_points) < 2
-        or len(route_points) > 10000
-    ):
+    if not isinstance(payload, dict):
+        return jsonify({
+            "available": False,
+            "status": "Traffic data unavailable",
+            "source": TOMTOM_TRAFFIC_SOURCE,
+            "reason": "invalid_route_geometry",
+        }), 400
+
+    route_points = (
+        payload.get("points")
+        or payload.get("coordinates")
+        or payload.get("route_points")
+        or payload.get("route")
+    )
+    if not route_points and isinstance(payload.get("geometry"), dict):
+        route_points = payload.get("geometry", {}).get("coordinates")
+
+    if not isinstance(route_points, list) or len(route_points) < 2 or len(route_points) > 20000:
         return jsonify({
             "available": False,
             "status": "Traffic data unavailable",
@@ -739,23 +836,28 @@ def route_traffic():
 
     validated_points = []
     for point in route_points:
-        if not isinstance(point, list) or len(point) != 2:
+        raw_lat = None
+        raw_lon = None
+        if isinstance(point, (list, tuple)) and len(point) >= 2:
+            raw_lat, raw_lon = point[0], point[1]
+        elif isinstance(point, dict):
+            raw_lat = point.get("lat") or point.get("latitude")
+            raw_lon = point.get("lon") or point.get("longitude")
+        else:
             return jsonify({
                 "available": False,
                 "status": "Traffic data unavailable",
                 "source": TOMTOM_TRAFFIC_SOURCE,
                 "reason": "invalid_route_geometry",
             }), 400
-        latitude, longitude = point
+
         if (
-            not isinstance(latitude, (int, float))
-            or isinstance(latitude, bool)
-            or not math.isfinite(latitude)
-            or not -90 <= latitude <= 90
-            or not isinstance(longitude, (int, float))
-            or isinstance(longitude, bool)
-            or not math.isfinite(longitude)
-            or not -180 <= longitude <= 180
+            not isinstance(raw_lat, (int, float))
+            or isinstance(raw_lat, bool)
+            or not math.isfinite(raw_lat)
+            or not isinstance(raw_lon, (int, float))
+            or isinstance(raw_lon, bool)
+            or not math.isfinite(raw_lon)
         ):
             return jsonify({
                 "available": False,
@@ -763,12 +865,45 @@ def route_traffic():
                 "source": TOMTOM_TRAFFIC_SOURCE,
                 "reason": "invalid_route_geometry",
             }), 400
-        validated_points.append((float(latitude), float(longitude)))
-    print("TRAFFIC POINTS:", len(validated_points), validated_points[:2], validated_points[-2:])
+
+        # Auto-detect GeoJSON [longitude, latitude] vs [latitude, longitude]
+        # In India / Tamil Nadu, lat is ~8-14 (< 40) and lon is ~76-81 (> 50).
+        f_lat = float(raw_lat)
+        f_lon = float(raw_lon)
+        if (f_lat > 50.0 and f_lon < 40.0) or (abs(f_lat) > 90.0 and abs(f_lon) <= 90.0):
+            # Coordinates were provided as [longitude, latitude] -> swap
+            latitude, longitude = f_lon, f_lat
+        else:
+            latitude, longitude = f_lat, f_lon
+
+        if not (-90.0 <= latitude <= 90.0) or not (-180.0 <= longitude <= 180.0):
+            return jsonify({
+                "available": False,
+                "status": "Traffic data unavailable",
+                "source": TOMTOM_TRAFFIC_SOURCE,
+                "reason": "invalid_route_geometry",
+            }), 400
+
+        validated_points.append((latitude, longitude))
+
+    if len(validated_points) < 2:
+        return jsonify({
+            "available": False,
+            "status": "Traffic data unavailable",
+            "source": TOMTOM_TRAFFIC_SOURCE,
+            "reason": "invalid_route_geometry",
+        }), 400
+
     assessment, reason = assess_route_traffic(validated_points, api_key)
-    print("ROUTE TRAFFIC DEBUG:", reason, assessment)
     if assessment is None:
-        status_code = 429 if reason == "rate_limited" else 503
+        if reason == "rate_limited":
+            status_code = 429
+        elif reason == "timeout":
+            status_code = 504
+        elif reason == "invalid_route_geometry":
+            status_code = 400
+        else:
+            status_code = 503
         return jsonify({
             "available": False,
             "status": "Traffic data unavailable",
@@ -1253,6 +1388,231 @@ def safety():
 
 FEEDBACK_DB_PATH = os.path.join(BASE_DIR, "feedback.db")
 
+HAZARD_CATEGORIES = {
+    "pothole_damaged_road": {
+        "title": "Pothole / damaged road",
+        "icon": "pothole",
+        "is_permanent": True,
+        "reconfirm_days": 14,
+        "ttl_hours": None,
+    },
+    "flooding_waterlogging": {
+        "title": "Flooding / waterlogging",
+        "icon": "flooding",
+        "is_permanent": False,
+        "reconfirm_days": None,
+        "ttl_hours": 12,
+    },
+    "road_blocked": {
+        "title": "Road blocked",
+        "icon": "road_blocked",
+        "is_permanent": False,
+        "reconfirm_days": None,
+        "ttl_hours": 8,
+    },
+    "construction": {
+        "title": "Construction",
+        "icon": "construction",
+        "is_permanent": False,
+        "reconfirm_days": None,
+        "ttl_hours": 336,  # 14 days
+    },
+    "broken_streetlight": {
+        "title": "Broken streetlight",
+        "icon": "broken_streetlight",
+        "is_permanent": True,
+        "reconfirm_days": 30,
+        "ttl_hours": None,
+    },
+    "broken_footpath": {
+        "title": "Broken footpath / missing sidewalk",
+        "icon": "broken_footpath",
+        "is_permanent": True,
+        "reconfirm_days": 30,
+        "ttl_hours": None,
+    },
+    "missing_wheelchair_ramp": {
+        "title": "Missing wheelchair ramp",
+        "icon": "missing_wheelchair_ramp",
+        "is_permanent": True,
+        "reconfirm_days": 30,
+        "ttl_hours": None,
+    },
+    "unsafe_pedestrian_crossing": {
+        "title": "Unsafe pedestrian crossing",
+        "icon": "unsafe_pedestrian_crossing",
+        "is_permanent": True,
+        "reconfirm_days": 30,
+        "ttl_hours": None,
+    },
+    "accident_hazard": {
+        "title": "Accident / other hazard",
+        "icon": "accident_hazard",
+        "is_permanent": False,
+        "reconfirm_days": None,
+        "ttl_hours": 8,
+    },
+}
+
+_REPORT_RATE_LIMITS = {}  # session_id -> list of datetime
+_VERIFY_RATE_LIMITS = {}
+
+
+def _check_rate_limit(store, key, max_requests=5, window_seconds=60):
+    now = datetime.now(timezone.utc)
+    if key not in store:
+        store[key] = []
+    # purge old
+    store[key] = [t for t in store[key] if (now - t).total_seconds() < window_seconds]
+    if len(store[key]) >= max_requests:
+        return False
+    store[key].append(now)
+    return True
+
+
+def normalize_hazard_category(cat_str):
+    if not cat_str or not isinstance(cat_str, str):
+        return None
+    s = cat_str.strip().lower()
+    for key, cfg in HAZARD_CATEGORIES.items():
+        if key == s or key in s:
+            return key
+        if cfg["title"].lower() in s:
+            return key
+    if "pothole" in s or "damaged road" in s or "crater" in s:
+        return "pothole_damaged_road"
+    if "flood" in s or "waterlog" in s:
+        return "flooding_waterlogging"
+    if "block" in s or "closure" in s:
+        return "road_blocked"
+    if "construction" in s or "road work" in s or "work" in s:
+        return "construction"
+    if "streetlight" in s or "street light" in s or "signal" in s or "light" in s:
+        return "broken_streetlight"
+    if "footpath" in s or "sidewalk" in s or "pavement" in s:
+        return "broken_footpath"
+    if "wheelchair" in s or "ramp" in s or "accessibility" in s:
+        return "missing_wheelchair_ramp"
+    if "pedestrian" in s or "crossing" in s or "zebra" in s:
+        return "unsafe_pedestrian_crossing"
+    if "accident" in s or "hazard" in s or "crash" in s:
+        return "accident_hazard"
+    return None
+
+
+def calculate_hazard_confidence(report):
+    score = 25.0
+    confs = int(report.get("confirmations_count") or 0)
+    score += min(confs * 20.0, 50.0)
+    disputes = int(report.get("disputes_count") or 0)
+    score -= (disputes * 30.0)
+
+    acc = report.get("location_accuracy")
+    if acc is not None:
+        try:
+            acc_val = float(acc)
+            if acc_val <= 15.0:
+                score += 10.0
+            elif acc_val <= 50.0:
+                score += 5.0
+        except (ValueError, TypeError):
+            pass
+
+    desc = report.get("description") or ""
+    if len(desc.strip()) >= 20:
+        score += 5.0
+    if report.get("location_landmark"):
+        score += 5.0
+    if report.get("photo_url"):
+        score += 10.0
+
+    ts_str = report.get("timestamp")
+    if ts_str:
+        try:
+            created_at = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            age_hours = (datetime.now(timezone.utc) - created_at).total_seconds() / 3600.0
+            if age_hours <= 4.0:
+                score += 10.0
+            elif age_hours <= 24.0:
+                score += 5.0
+            elif age_hours > 48.0 and confs == 0:
+                score -= 15.0
+        except Exception:
+            pass
+
+    score = max(0.0, min(100.0, score))
+    if score >= 70.0:
+        level = "High confidence"
+    elif score >= 40.0:
+        level = "Moderate confidence"
+    else:
+        level = "Low confidence"
+
+    return round(score, 1), level
+
+
+def compute_hazard_status_and_expiry(report):
+    status = report.get("status") or "Pending"
+    if status == "Resolved":
+        return "Resolved", False
+
+    cat_key = report.get("category")
+    cfg = HAZARD_CATEGORIES.get(cat_key, {})
+    is_perm = cfg.get("is_permanent", False)
+    ttl = cfg.get("ttl_hours")
+
+    disputes = int(report.get("disputes_count") or 0)
+    confs = int(report.get("confirmations_count") or 0)
+
+    ts_str = report.get("timestamp")
+    last_conf_str = report.get("last_confirmed_at")
+    age_hours = 0.0
+    if ts_str:
+        try:
+            created_at = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            ref_time = created_at
+            if last_conf_str:
+                try:
+                    ref_time = max(ref_time, datetime.fromisoformat(last_conf_str.replace("Z", "+00:00")))
+                except Exception:
+                    pass
+            age_hours = (datetime.now(timezone.utc) - ref_time).total_seconds() / 3600.0
+        except Exception:
+            pass
+
+    if not is_perm and ttl and age_hours > ttl and confs == 0:
+        return "Expired", False
+
+    if disputes >= 2 and disputes >= confs:
+        return "Disputed", False
+    if confs >= 2 and confs > disputes:
+        return "Confirmed", False
+
+    needs_reconf = False
+    reconf_days = cfg.get("reconfirm_days")
+    if is_perm and reconf_days and (age_hours / 24.0) > reconf_days:
+        needs_reconf = True
+
+    return status if status in ["Pending", "Confirmed", "Disputed"] else "Pending", needs_reconf
+
+
+def check_hazard_near_blackspot(lat, lon, threshold_meters=200.0):
+    if lat is None or lon is None or verified_blackspots_df.empty:
+        return False, None
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (ValueError, TypeError):
+        return False, None
+
+    for _, row in verified_blackspots_df.iterrows():
+        b_lat = float(row["latitude"])
+        b_lon = float(row["longitude"])
+        d = haversine_distance(lat_f, lon_f, b_lat, b_lon)
+        if d <= threshold_meters:
+            return True, str(row["blackspot_id"])
+    return False, None
+
 
 def init_feedback_db():
     with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
@@ -1285,6 +1645,69 @@ def init_feedback_db():
             )
             """
         )
+        # Migrate road_reports columns if missing
+        cursor.execute("PRAGMA table_info(road_reports)")
+        existing_cols = {col[1] for col in cursor.fetchall()}
+        new_cols = [
+            ("category", "TEXT"),
+            ("latitude", "REAL"),
+            ("longitude", "REAL"),
+            ("location_accuracy", "REAL"),
+            ("location_source", "TEXT"),
+            ("photo_url", "TEXT"),
+            ("user_session_id", "TEXT"),
+            ("status", "TEXT DEFAULT 'Pending'"),
+            ("confirmations_count", "INTEGER DEFAULT 0"),
+            ("disputes_count", "INTEGER DEFAULT 0"),
+            ("last_confirmed_at", "TEXT"),
+            ("resolved_at", "TEXT"),
+            ("confidence_score", "REAL DEFAULT 25.0"),
+            ("confidence_level", "TEXT DEFAULT 'Low confidence'"),
+        ]
+        for col_name, col_type in new_cols:
+            if col_name not in existing_cols:
+                try:
+                    cursor.execute(f"ALTER TABLE road_reports ADD COLUMN {col_name} {col_type}")
+                except Exception:
+                    pass
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hazard_verifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_id INTEGER NOT NULL,
+                user_session_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                comment TEXT,
+                timestamp TEXT NOT NULL,
+                UNIQUE(report_id, user_session_id)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS live_shared_trips (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                share_token TEXT UNIQUE NOT NULL,
+                update_token TEXT NOT NULL,
+                origin TEXT,
+                destination TEXT NOT NULL,
+                vehicle TEXT,
+                eta_minutes INTEGER,
+                status TEXT NOT NULL DEFAULT 'active',
+                latitude REAL,
+                longitude REAL,
+                heading REAL,
+                speed REAL,
+                accuracy REAL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shared_trips_share_token ON live_shared_trips(share_token)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shared_trips_update_token ON live_shared_trips(update_token)")
         conn.commit()
 
 
@@ -1381,96 +1804,187 @@ def submit_road_report():
     if not isinstance(payload, dict):
         return jsonify({"success": False, "error": "Invalid JSON body"}), 400
 
+    user_session_id = str(payload.get("user_session_id") or "session_anonymous").strip()
+    if not _check_rate_limit(_REPORT_RATE_LIMITS, user_session_id, max_requests=5, window_seconds=60):
+        return jsonify({
+            "success": False,
+            "error": "Rate limit exceeded. Maximum 5 reports per minute.",
+        }), 429
+
     problem_type = payload.get("problem_type")
-    severity = payload.get("severity")
+    raw_cat = payload.get("category") or problem_type
+    cat_slug = normalize_hazard_category(raw_cat)
+    if not cat_slug:
+        return jsonify({
+            "success": False,
+            "error": "A valid hazard category is required",
+        }), 400
+
     description = payload.get("description")
-    location_landmark = payload.get("location_landmark")
-    route_origin = payload.get("route_origin")
-    route_destination = payload.get("route_destination")
-    selected_route_index = payload.get("selected_route_index")
-    safety_score = payload.get("safety_score")
-    timestamp = payload.get("timestamp")
-
-    if not isinstance(problem_type, str) or not problem_type.strip():
-        return jsonify({
-            "success": False,
-            "error": "Problem type is required and cannot be empty",
-        }), 400
-
-    if not isinstance(severity, str):
-        return jsonify({
-            "success": False,
-            "error": "Severity must be 'Low', 'Medium', or 'High'",
-        }), 400
-
-    clean_severity = severity.strip().title()
-    if clean_severity not in ["Low", "Medium", "High"]:
-        return jsonify({
-            "success": False,
-            "error": "Severity must be 'Low', 'Medium', or 'High'",
-        }), 400
-
     if not isinstance(description, str) or not description.strip():
         return jsonify({
             "success": False,
             "error": "Description is required and cannot be empty",
         }), 400
 
-    clean_problem_type = problem_type.strip()
-    clean_description = description.strip()
+    severity = payload.get("severity") or "Medium"
+    if not isinstance(severity, str):
+        severity = "Medium"
+    clean_severity = severity.strip().title()
+    if clean_severity not in ["Low", "Medium", "High"]:
+        clean_severity = "Medium"
+
+    lat = payload.get("latitude")
+    lon = payload.get("longitude")
+    clean_lat = None
+    clean_lon = None
+    if lat is not None or lon is not None:
+        try:
+            clean_lat = float(lat)
+            clean_lon = float(lon)
+            if not (-90.0 <= clean_lat <= 90.0 and -180.0 <= clean_lon <= 180.0):
+                return jsonify({
+                    "success": False,
+                    "error": "Latitude and longitude must be valid geographical coordinates",
+                }), 400
+        except (ValueError, TypeError):
+            return jsonify({
+                "success": False,
+                "error": "Invalid coordinate format",
+            }), 400
+
+    clean_accuracy = None
+    if payload.get("location_accuracy") is not None:
+        try:
+            clean_accuracy = float(payload.get("location_accuracy"))
+        except (ValueError, TypeError):
+            clean_accuracy = None
+
+    clean_source = str(payload.get("location_source") or "gps").strip()
+    clean_photo = str(payload.get("photo_url") or "").strip() or None
     clean_landmark = (
-        location_landmark.strip()
-        if isinstance(location_landmark, str) and location_landmark.strip()
+        payload.get("location_landmark").strip()
+        if isinstance(payload.get("location_landmark"), str) and payload.get("location_landmark").strip()
         else None
     )
     clean_origin = (
-        route_origin.strip()
-        if isinstance(route_origin, str) and route_origin.strip()
+        payload.get("route_origin").strip()
+        if isinstance(payload.get("route_origin"), str) and payload.get("route_origin").strip()
         else None
     )
     clean_destination = (
-        route_destination.strip()
-        if isinstance(route_destination, str) and route_destination.strip()
+        payload.get("route_destination").strip()
+        if isinstance(payload.get("route_destination"), str) and payload.get("route_destination").strip()
         else None
     )
 
     clean_route_idx = None
-    if selected_route_index is not None:
+    if payload.get("selected_route_index") is not None:
         try:
-            clean_route_idx = int(selected_route_index)
+            clean_route_idx = int(payload.get("selected_route_index"))
         except (ValueError, TypeError):
             clean_route_idx = None
 
     clean_score = None
-    if safety_score is not None:
+    if payload.get("safety_score") is not None:
         try:
-            clean_score = float(safety_score)
+            clean_score = float(payload.get("safety_score"))
         except (ValueError, TypeError):
             clean_score = None
 
+    timestamp = payload.get("timestamp")
     if not isinstance(timestamp, str) or not timestamp.strip():
         timestamp = datetime.now(timezone.utc).isoformat()
     else:
         timestamp = timestamp.strip()
 
+    force_new = bool(payload.get("force_new", False))
+
+    init_feedback_db()
+    # Check duplicate reports within 50m of same category in last 6 hours
+    if clean_lat is not None and clean_lon is not None and not force_new:
+        try:
+            with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT id, problem_type, category, severity, description,
+                           latitude, longitude, status, timestamp
+                    FROM road_reports
+                    WHERE category = ? AND status NOT IN ('Resolved', 'Expired')
+                    """,
+                    (cat_slug,)
+                )
+                for row in cursor.fetchall():
+                    r_dict = dict(row)
+                    if r_dict.get("latitude") is not None and r_dict.get("longitude") is not None:
+                        dist_m = haversine_distance(clean_lat, clean_lon, r_dict["latitude"], r_dict["longitude"])
+                        if dist_m <= 50.0:
+                            try:
+                                r_time = datetime.fromisoformat(r_dict["timestamp"].replace("Z", "+00:00"))
+                                if (datetime.now(timezone.utc) - r_time).total_seconds() <= 21600:
+                                    return jsonify({
+                                        "success": False,
+                                        "error": "duplicate_detected",
+                                        "duplicate_detected": True,
+                                        "duplicate_report": r_dict,
+                                        "existing_report": r_dict,
+                                        "existing_report_id": r_dict["id"],
+                                        "distance_meters": round(dist_m, 1),
+                                        "message": f"A similar {r_dict['problem_type']} report already exists {round(dist_m, 1)}m away. You can confirm it instead.",
+                                    }), 409
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+
+    # Double-counting check with verified blackspots
+    is_near_b, matched_b_id = check_hazard_near_blackspot(clean_lat, clean_lon, threshold_meters=200.0)
+
+    cat_title = HAZARD_CATEGORIES[cat_slug]["title"]
+    temp_rep = {
+        "description": description.strip(),
+        "location_accuracy": clean_accuracy,
+        "location_landmark": clean_landmark,
+        "photo_url": clean_photo,
+        "confirmations_count": 0,
+        "disputes_count": 0,
+        "timestamp": timestamp,
+    }
+    conf_score, conf_level = calculate_hazard_confidence(temp_rep)
+
     try:
-        init_feedback_db()
         with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
                 INSERT INTO road_reports (
-                    problem_type, severity, description, location_landmark,
-                    route_origin, route_destination, selected_route_index,
-                    safety_score, timestamp
+                    problem_type, category, severity, description, location_landmark,
+                    latitude, longitude, location_accuracy, location_source, photo_url,
+                    user_session_id, status, confirmations_count, disputes_count,
+                    confidence_score, confidence_level, route_origin, route_destination,
+                    selected_route_index, safety_score, timestamp
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    clean_problem_type,
+                    cat_title,
+                    cat_slug,
                     clean_severity,
-                    clean_description,
+                    description.strip(),
                     clean_landmark,
+                    clean_lat,
+                    clean_lon,
+                    clean_accuracy,
+                    clean_source,
+                    clean_photo,
+                    user_session_id,
+                    "Pending",
+                    0,
+                    0,
+                    conf_score,
+                    conf_level,
                     clean_origin,
                     clean_destination,
                     clean_route_idx,
@@ -1483,8 +1997,14 @@ def submit_road_report():
 
         return jsonify({
             "success": True,
-            "message": "Road problem reported successfully",
+            "message": "Community road hazard reported successfully",
             "report_id": report_id,
+            "category": cat_slug,
+            "status": "Pending",
+            "confidence_score": conf_score,
+            "confidence_level": conf_level,
+            "is_near_blackspot": is_near_b,
+            "matched_blackspot_id": matched_b_id,
         }), 201
     except Exception as exc:
         return jsonify({
@@ -1493,27 +2013,1333 @@ def submit_road_report():
         }), 500
 
 
+@app.route("/road-report/<int:report_id>/verify", methods=["POST", "OPTIONS"])
+def verify_road_report(report_id):
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+
+    payload = request.get_json(silent=True) or {}
+    user_session_id = str(payload.get("user_session_id") or "").strip()
+    action = str(payload.get("action") or "").strip().lower()
+    comment = str(payload.get("comment") or "").strip() or None
+
+    if not user_session_id:
+        return jsonify({"success": False, "error": "user_session_id is required"}), 400
+
+    if not _check_rate_limit(_VERIFY_RATE_LIMITS, user_session_id, max_requests=15, window_seconds=60):
+        return jsonify({
+            "success": False,
+            "error": "Rate limit exceeded. Maximum 15 verification actions per minute.",
+        }), 429
+
+    if action not in ["still_there", "resolved", "incorrect_location", "incorrect_report"]:
+        return jsonify({
+            "success": False,
+            "error": "Action must be one of: 'still_there', 'resolved', 'incorrect_location', 'incorrect_report'",
+        }), 400
+
+    try:
+        init_feedback_db()
+        with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM road_reports WHERE id = ?", (report_id,))
+            rep_row = cursor.fetchone()
+            if not rep_row:
+                return jsonify({"success": False, "error": "Report not found"}), 404
+            report = dict(rep_row)
+
+            # Prevent self-confirmation
+            if report.get("user_session_id") == user_session_id and action == "still_there":
+                return jsonify({
+                    "success": False,
+                    "error": "You cannot confirm your own report.",
+                }), 403
+
+            now_ts = datetime.now(timezone.utc).isoformat()
+
+            cursor.execute(
+                "SELECT * FROM hazard_verifications WHERE report_id = ? AND user_session_id = ?",
+                (report_id, user_session_id),
+            )
+            prev_ver = cursor.fetchone()
+
+            if prev_ver:
+                if prev_ver["action"] == action:
+                    return jsonify({
+                        "success": False,
+                        "error": "You have already submitted this verification action.",
+                    }), 409
+                cursor.execute(
+                    """
+                    UPDATE hazard_verifications SET action = ?, comment = ?, timestamp = ?
+                    WHERE report_id = ? AND user_session_id = ?
+                    """,
+                    (action, comment, now_ts, report_id, user_session_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO hazard_verifications (report_id, user_session_id, action, comment, timestamp)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (report_id, user_session_id, action, comment, now_ts),
+                )
+
+            cursor.execute(
+                "SELECT action, COUNT(*) FROM hazard_verifications WHERE report_id = ? GROUP BY action",
+                (report_id,),
+            )
+            action_counts = dict(cursor.fetchall())
+            confs = action_counts.get("still_there", 0)
+            disputes = action_counts.get("incorrect_location", 0) + action_counts.get("incorrect_report", 0)
+            resolveds = action_counts.get("resolved", 0)
+
+            report["confirmations_count"] = confs
+            report["disputes_count"] = disputes
+            if action == "still_there":
+                report["last_confirmed_at"] = now_ts
+            if resolveds >= 2:
+                report["status"] = "Resolved"
+                report["resolved_at"] = now_ts
+
+            new_status, _ = compute_hazard_status_and_expiry(report)
+            conf_score, conf_level = calculate_hazard_confidence(report)
+
+            cursor.execute(
+                """
+                UPDATE road_reports SET
+                    confirmations_count = ?,
+                    disputes_count = ?,
+                    status = ?,
+                    confidence_score = ?,
+                    confidence_level = ?,
+                    last_confirmed_at = COALESCE(?, last_confirmed_at),
+                    resolved_at = COALESCE(?, resolved_at)
+                WHERE id = ?
+                """,
+                (
+                    confs,
+                    disputes,
+                    new_status,
+                    conf_score,
+                    conf_level,
+                    now_ts if action == "still_there" else None,
+                    now_ts if new_status == "Resolved" else None,
+                    report_id,
+                ),
+            )
+            conn.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"Verification '{action}' recorded successfully",
+            "report_id": report_id,
+            "action": action,
+            "status": new_status,
+            "confirmations_count": confs,
+            "disputes_count": disputes,
+            "confidence_score": conf_score,
+            "confidence_level": conf_level,
+        }), 200
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 @app.route("/road-reports", methods=["GET"])
 def get_road_reports():
+    try:
+        init_feedback_db()
+        active_only = request.args.get("active_only", "true").lower() in ["true", "1", "yes"]
+        filter_status = request.args.get("status")
+        filter_cat = request.args.get("category")
+        session_id = request.args.get("session_id")
+        lat_param = request.args.get("lat", type=float)
+        lon_param = request.args.get("lon", type=float)
+        radius_m = request.args.get("radius_meters", default=1000.0, type=float)
+
+        pts_param = request.args.get("points")
+        parsed_route_points = []
+        if pts_param:
+            try:
+                raw_pts = json.loads(pts_param)
+                if isinstance(raw_pts, list):
+                    for p in raw_pts:
+                        if isinstance(p, (list, tuple)) and len(p) >= 2:
+                            parsed_route_points.append((float(p[0]), float(p[1])))
+                        elif isinstance(p, dict) and "lat" in p and "lon" in p:
+                            parsed_route_points.append((float(p["lat"]), float(p["lon"])))
+            except Exception:
+                pass
+
+        with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM road_reports ORDER BY id DESC")
+            raw_reports = [dict(row) for row in cursor.fetchall()]
+
+            # Fetch user verifications if session_id provided
+            user_votes = {}
+            if session_id:
+                cursor.execute(
+                    "SELECT report_id, action FROM hazard_verifications WHERE user_session_id = ?",
+                    (session_id,)
+                )
+                user_votes = dict(cursor.fetchall())
+
+        enriched_reports = []
+        for rep in raw_reports:
+            # Check expiry & status dynamically
+            current_status, needs_reconf = compute_hazard_status_and_expiry(rep)
+            rep["status"] = current_status
+            rep["needs_reconfirmation"] = needs_reconf
+            conf_score, conf_level = calculate_hazard_confidence(rep)
+            rep["confidence_score"] = conf_score
+            rep["confidence_level"] = conf_level
+
+            # Double-counting check
+            is_near_b, b_id = check_hazard_near_blackspot(rep.get("latitude"), rep.get("longitude"))
+            rep["is_near_blackspot"] = is_near_b
+            rep["matched_blackspot_id"] = b_id
+
+            if session_id:
+                rep["my_verification"] = user_votes.get(rep["id"])
+                rep["is_my_report"] = (rep.get("user_session_id") == session_id)
+
+            # Apply filters
+            if active_only and rep["status"] in ["Resolved", "Expired"]:
+                continue
+            if filter_status and rep["status"].lower() != filter_status.lower():
+                continue
+            if filter_cat:
+                norm = normalize_hazard_category(filter_cat)
+                if norm and rep.get("category") != norm:
+                    continue
+
+            # Point distance filter
+            r_lat = rep.get("latitude")
+            r_lon = rep.get("longitude")
+            if lat_param is not None and lon_param is not None:
+                if r_lat is None or r_lon is None:
+                    continue
+                d = haversine_distance(lat_param, lon_param, r_lat, r_lon)
+                if d > radius_m:
+                    continue
+                rep["distance_meters"] = round(d, 1)
+
+            # Route distance filter
+            if parsed_route_points:
+                if r_lat is None or r_lon is None:
+                    continue
+                min_route_dist = min(
+                    haversine_distance(p_lat, p_lon, r_lat, r_lon)
+                    for p_lat, p_lon in parsed_route_points
+                )
+                if min_route_dist > radius_m:
+                    continue
+                rep["distance_from_route_meters"] = round(min_route_dist, 1)
+
+            enriched_reports.append(rep)
+
+        return jsonify({
+            "success": True,
+            "count": len(enriched_reports),
+            "reports": enriched_reports,
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.route("/road-reports/my-reports", methods=["GET"])
+def get_my_road_reports():
+    session_id = request.args.get("session_id", "").strip()
+    if not session_id:
+        return jsonify({"success": False, "error": "session_id is required"}), 400
+
     try:
         init_feedback_db()
         with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
-                """
-                SELECT id, problem_type, severity, description, location_landmark,
-                       route_origin, route_destination, selected_route_index,
-                       safety_score, timestamp
-                FROM road_reports
-                ORDER BY id DESC
-                """
+                "SELECT * FROM road_reports WHERE user_session_id = ? ORDER BY id DESC",
+                (session_id,)
             )
-            rows = [dict(row) for row in cursor.fetchall()]
-        return jsonify({"success": True, "count": len(rows), "reports": rows})
+            raw_reports = [dict(row) for row in cursor.fetchall()]
+
+            cursor.execute(
+                "SELECT report_id, action FROM hazard_verifications WHERE user_session_id = ?",
+                (session_id,)
+            )
+            user_votes = dict(cursor.fetchall())
+
+        for rep in raw_reports:
+            current_status, needs_reconf = compute_hazard_status_and_expiry(rep)
+            rep["status"] = current_status
+            rep["needs_reconfirmation"] = needs_reconf
+            conf_score, conf_level = calculate_hazard_confidence(rep)
+            rep["confidence_score"] = conf_score
+            rep["confidence_level"] = conf_level
+            rep["my_verification"] = user_votes.get(rep["id"])
+            rep["is_my_report"] = True
+
+        return jsonify({
+            "success": True,
+            "count": len(raw_reports),
+            "reports": raw_reports,
+        })
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
 
+
+@app.route("/route-hazard-reroute-check", methods=["POST"])
+def check_route_hazard_reroute():
+    try:
+        data = request.get_json(silent=True) or {}
+        curr_pts = data.get("current_route_points") or []
+        alt_pts = data.get("alternative_route_points") or []
+        curr_dist = float(data.get("current_distance_km") or 0.0)
+        curr_dur = float(data.get("current_duration_minutes") or 0.0)
+        alt_dist = float(data.get("alternative_distance_km") or 0.0)
+        alt_dur = float(data.get("alternative_duration_minutes") or 0.0)
+
+        def _parse_pts(pts):
+            res = []
+            for p in pts:
+                if isinstance(p, (list, tuple)) and len(p) >= 2:
+                    try:
+                        res.append((float(p[0]), float(p[1])))
+                    except (ValueError, TypeError):
+                        pass
+                elif isinstance(p, dict) and "lat" in p and "lon" in p:
+                    try:
+                        res.append((float(p["lat"]), float(p["lon"])))
+                    except (ValueError, TypeError):
+                        pass
+            return res
+
+        curr_parsed = _parse_pts(curr_pts)
+        alt_parsed = _parse_pts(alt_pts)
+
+        if not curr_parsed:
+            return jsonify({
+                "success": False,
+                "error": "current_route_points is required and must not be empty",
+            }), 400
+
+        init_feedback_db()
+        with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM road_reports ORDER BY id DESC")
+            raw_reports = [dict(row) for row in cursor.fetchall()]
+
+        curr_confirmed_hazards = []
+        alt_confirmed_hazards = []
+        pending_hazards = []
+        disputed_hazards = []
+
+        for rep in raw_reports:
+            status, needs_reconf = compute_hazard_status_and_expiry(rep)
+            rep["status"] = status
+            rep["needs_reconfirmation"] = needs_reconf
+            conf_score, conf_level = calculate_hazard_confidence(rep)
+            rep["confidence_score"] = conf_score
+            rep["confidence_level"] = conf_level
+
+            is_near_b, b_id = check_hazard_near_blackspot(rep.get("latitude"), rep.get("longitude"))
+            rep["is_near_blackspot"] = is_near_b
+            rep["matched_blackspot_id"] = b_id
+
+            if status in ["Resolved", "Expired"]:
+                continue
+
+            r_lat = rep.get("latitude")
+            r_lon = rep.get("longitude")
+            if r_lat is None or r_lon is None:
+                continue
+
+            d_curr = min(haversine_distance(p[0], p[1], r_lat, r_lon) for p in curr_parsed)
+            rep["distance_to_current_route_meters"] = round(d_curr, 1)
+
+            d_alt = None
+            if alt_parsed:
+                d_alt = min(haversine_distance(p[0], p[1], r_lat, r_lon) for p in alt_parsed)
+                rep["distance_to_alternative_route_meters"] = round(d_alt, 1)
+
+            if d_curr <= 800.0:
+                if status == "Confirmed":
+                    curr_confirmed_hazards.append(rep)
+                elif status == "Pending":
+                    pending_hazards.append(rep)
+                elif status == "Disputed":
+                    disputed_hazards.append(rep)
+
+            if d_alt is not None and d_alt <= 800.0 and status == "Confirmed":
+                alt_confirmed_hazards.append(rep)
+
+        can_reroute = False
+        reason = ""
+        avoided_count = 0
+
+        if not curr_confirmed_hazards:
+            can_reroute = False
+            reason = "No confirmed hazards detected along current route."
+        elif not alt_parsed:
+            can_reroute = False
+            reason = "Single route corridor. No alternative route is available to bypass hazard."
+        else:
+            avoided = []
+            for h in curr_confirmed_hazards:
+                d_to_alt = h.get("distance_to_alternative_route_meters") or 0.0
+                if d_to_alt > 1500.0:
+                    avoided.append(h)
+
+            avoided_count = len(avoided)
+            if avoided_count > 0 and len(alt_confirmed_hazards) < len(curr_confirmed_hazards):
+                can_reroute = True
+                dist_diff = round(alt_dist - curr_dist, 2) if (alt_dist > 0 and curr_dist > 0) else 0.0
+                dur_diff = round(alt_dur - curr_dur, 1) if (alt_dur > 0 and curr_dur > 0) else 0.0
+                sign_dist = f"+{dist_diff}" if dist_diff >= 0 else f"{dist_diff}"
+                sign_dur = f"+{dur_diff}" if dur_diff >= 0 else f"{dur_diff}"
+                reason = f"Alternative route bypasses {avoided_count} confirmed hazard(s) ({sign_dist} km, {sign_dur} mins)."
+            else:
+                can_reroute = False
+                reason = "Alternative route does not avoid the hazard corridor or has equal/higher hazard exposure."
+
+        return jsonify({
+            "success": True,
+            "can_reroute": can_reroute,
+            "reason": reason,
+            "avoided_hazard_count": avoided_count,
+            "current_confirmed_hazards": curr_confirmed_hazards,
+            "alternative_confirmed_hazards": alt_confirmed_hazards,
+            "pending_hazards": pending_hazards,
+            "disputed_hazards": disputed_hazards,
+            "distance_diff_km": round(alt_dist - curr_dist, 2) if (alt_dist > 0 and curr_dist > 0) else None,
+            "duration_diff_minutes": round(alt_dur - curr_dur, 1) if (alt_dur > 0 and curr_dur > 0) else None,
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+
+
+# ==============================================================================
+# WEATHER & WATERLOGGING-AWARE SMART ROUTING SYSTEM
+# ==============================================================================
+
+WMO_WEATHER_CODES = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Depositing rime fog",
+    51: "Light drizzle",
+    53: "Moderate drizzle",
+    55: "Dense drizzle",
+    56: "Light freezing drizzle",
+    57: "Dense freezing drizzle",
+    61: "Slight rain",
+    63: "Moderate rain",
+    65: "Heavy rain",
+    66: "Light freezing rain",
+    67: "Heavy freezing rain",
+    71: "Slight snow fall",
+    73: "Moderate snow fall",
+    75: "Heavy snow fall",
+    77: "Snow grains",
+    80: "Slight rain showers",
+    81: "Moderate rain showers",
+    82: "Violent rain showers",
+    85: "Slight snow showers",
+    86: "Heavy snow showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm with slight hail",
+    99: "Thunderstorm with heavy hail",
+}
+
+WEATHER_CACHE = {}
+WEATHER_CACHE_TTL_SECONDS = 900  # 15 minutes
+
+
+def fetch_open_meteo_weather(lat, lon, timeout_sec=5.0):
+    cache_key = (round(float(lat), 2), round(float(lon), 2))
+    now = time.time()
+    if cache_key in WEATHER_CACHE:
+        cached_entry, timestamp = WEATHER_CACHE[cache_key]
+        if now - timestamp < WEATHER_CACHE_TTL_SECONDS:
+            return cached_entry
+
+    url = (
+        f"https://api.open-meteo.com/v1/forecast?latitude={lat:.4f}&longitude={lon:.4f}"
+        "&current=temperature_2m,relative_humidity_2m,precipitation,rain,weather_code,wind_speed_10m,visibility"
+        "&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,visibility"
+        "&forecast_days=1&timezone=auto"
+    )
+
+    req = urllib.request.Request(url, headers={"User-Agent": "SafeRouteTN-Weather/2.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+            current = raw.get("current") or {}
+            hourly = raw.get("hourly") or {}
+
+            code = int(current.get("weather_code") or 0)
+            desc = WMO_WEATHER_CODES.get(code, "Unknown")
+            obs_time = current.get("time") or datetime.now(timezone.utc).isoformat()
+
+            # Age calculation
+            age_min = 0.0
+            is_fresh = True
+            try:
+                dt_obs = datetime.fromisoformat(obs_time)
+                # If naive, assume local or UTC
+                if dt_obs.tzinfo is None:
+                    dt_obs = dt_obs.replace(tzinfo=timezone.utc)
+                age_min = max(0.0, (datetime.now(timezone.utc) - dt_obs).total_seconds() / 60.0)
+                if age_min > 120.0:  # Older than 2 hours
+                    is_fresh = False
+            except Exception:
+                pass
+
+            # Hourly forecast (next 3 hours)
+            h_times = hourly.get("time") or []
+            h_temps = hourly.get("temperature_2m") or []
+            h_probs = hourly.get("precipitation_probability") or []
+            h_precips = hourly.get("precipitation") or []
+            h_codes = hourly.get("weather_code") or []
+            h_vis = hourly.get("visibility") or []
+
+            forecast_entries = []
+            now_str = datetime.now().strftime("%Y-%m-%dT%H:00")
+            start_idx = 0
+            for idx, t in enumerate(h_times):
+                if t >= now_str:
+                    start_idx = idx
+                    break
+
+            for i in range(start_idx, min(start_idx + 3, len(h_times))):
+                f_code = int(h_codes[i]) if i < len(h_codes) and h_codes[i] is not None else 0
+                forecast_entries.append({
+                    "time": h_times[i] if i < len(h_times) else "",
+                    "temperature_c": float(h_temps[i]) if i < len(h_temps) and h_temps[i] is not None else 0.0,
+                    "precipitation_probability_pct": int(h_probs[i]) if i < len(h_probs) and h_probs[i] is not None else 0,
+                    "precipitation_mm": float(h_precips[i]) if i < len(h_precips) and h_precips[i] is not None else 0.0,
+                    "weather_code": f_code,
+                    "weather_description": WMO_WEATHER_CODES.get(f_code, "Clear sky"),
+                    "visibility_m": float(h_vis[i]) if i < len(h_vis) and h_vis[i] is not None else None,
+                })
+
+            parsed = {
+                "available": True,
+                "provider": "Open-Meteo Weather API",
+                "latitude": round(lat, 4),
+                "longitude": round(lon, 4),
+                "temperature_c": float(current.get("temperature_2m") or 0.0),
+                "relative_humidity_pct": float(current.get("relative_humidity_2m") or 0.0),
+                "precipitation_mm": float(current.get("precipitation") or 0.0),
+                "rain_mm": float(current.get("rain") or 0.0),
+                "weather_code": code,
+                "weather_description": desc,
+                "wind_speed_kmh": float(current.get("wind_speed_10m") or 0.0),
+                "visibility_m": float(current["visibility"]) if "visibility" in current and current["visibility"] is not None else None,
+                "observation_time": obs_time,
+                "is_fresh": is_fresh,
+                "data_age_minutes": round(age_min, 1),
+                "hourly_forecast": forecast_entries,
+            }
+            WEATHER_CACHE[cache_key] = (parsed, now)
+            return parsed
+    except Exception as exc:
+        return {
+            "available": False,
+            "provider": "Open-Meteo Weather API",
+            "latitude": round(lat, 4),
+            "longitude": round(lon, 4),
+            "error": str(exc),
+            "is_fresh": False,
+            "hourly_forecast": [],
+        }
+
+
+def sample_route_waypoints(route_points, max_samples=4):
+    if not route_points or len(route_points) < 2:
+        return []
+
+    # Calculate cumulative distance
+    total_dist = 0.0
+    for i in range(len(route_points) - 1):
+        p1 = route_points[i]
+        p2 = route_points[i + 1]
+        total_dist += haversine_distance(p1[0], p1[1], p2[0], p2[1])
+
+    total_km = total_dist / 1000.0
+
+    if total_km <= 30.0 or len(route_points) <= 4:
+        indices = [0, len(route_points) - 1]
+        labels = ["Start", "Destination"]
+    elif total_km <= 150.0:
+        indices = [0, len(route_points) // 2, len(route_points) - 1]
+        labels = ["Start", "Midpoint", "Destination"]
+    else:
+        n = len(route_points)
+        indices = [0, n // 3, (2 * n) // 3, n - 1]
+        labels = ["Start", "Midpoint 1", "Midpoint 2", "Destination"]
+
+    waypoints = []
+    for idx, label in zip(indices, labels):
+        pt = route_points[idx]
+        waypoints.append({
+            "label": label,
+            "latitude": pt[0],
+            "longitude": pt[1],
+            "route_point_index": idx,
+        })
+    return waypoints
+
+
+@app.route("/route-weather", methods=["POST", "OPTIONS"])
+def route_weather():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+
+    try:
+        data = request.get_json(silent=True) or {}
+        raw_pts = (
+            data.get("route_points")
+            or data.get("coordinates")
+            or data.get("points")
+        )
+
+        def _parse_pts(pts):
+            res = []
+            if not isinstance(pts, list):
+                return res
+            for p in pts:
+                if isinstance(p, (list, tuple)) and len(p) >= 2:
+                    try:
+                        res.append((float(p[0]), float(p[1])))
+                    except (ValueError, TypeError):
+                        pass
+                elif isinstance(p, dict) and "lat" in p and "lon" in p:
+                    try:
+                        res.append((float(p["lat"]), float(p["lon"])))
+                    except (ValueError, TypeError):
+                        pass
+            return res
+
+        route_points = _parse_pts(raw_pts)
+        if not route_points or len(route_points) < 2:
+            return jsonify({
+                "success": False,
+                "error": "route_points is required and must contain at least 2 coordinate pairs",
+            }), 400
+
+        # Sample waypoints
+        sampled = sample_route_waypoints(route_points)
+
+        # Query weather for waypoints
+        waypoint_weathers = []
+        any_success = False
+        max_rain = 0.0
+        min_vis = None
+        max_wind = 0.0
+        primary_condition = "Clear sky"
+
+        for wp in sampled:
+            w = fetch_open_meteo_weather(wp["latitude"], wp["longitude"])
+            combined = dict(wp)
+            combined.update(w)
+            waypoint_weathers.append(combined)
+            if w.get("available"):
+                any_success = True
+                rain = float(w.get("precipitation_mm") or 0.0)
+                if rain > max_rain:
+                    max_rain = rain
+                vis = w.get("visibility_m")
+                if vis is not None:
+                    if min_vis is None or vis < min_vis:
+                        min_vis = vis
+                wind = float(w.get("wind_speed_kmh") or 0.0)
+                if wind > max_wind:
+                    max_wind = wind
+                if w.get("weather_description") and w.get("weather_description") != "Clear sky":
+                    primary_condition = w["weather_description"]
+
+        # Cross-reference community waterlogging/flood reports along the corridor
+        init_feedback_db()
+        with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM road_reports
+                WHERE category IN ('flooding_waterlogging', 'waterlogging_flooding')
+                ORDER BY id DESC
+                """
+            )
+            raw_reports = [dict(row) for row in cursor.fetchall()]
+
+        confirmed_floods = []
+        pending_floods = []
+        disputed_floods = []
+
+        for rep in raw_reports:
+            status, needs_reconf = compute_hazard_status_and_expiry(rep)
+            rep["status"] = status
+            rep["needs_reconfirmation"] = needs_reconf
+            conf_score, conf_level = calculate_hazard_confidence(rep)
+            rep["confidence_score"] = conf_score
+            rep["confidence_level"] = conf_level
+
+            is_near_b, b_id = check_hazard_near_blackspot(rep.get("latitude"), rep.get("longitude"))
+            rep["is_near_blackspot"] = is_near_b
+            rep["matched_blackspot_id"] = b_id
+
+            if status in ["Resolved", "Expired"]:
+                continue
+
+            r_lat = rep.get("latitude")
+            r_lon = rep.get("longitude")
+            if r_lat is None or r_lon is None:
+                continue
+
+            d_route = min(haversine_distance(p[0], p[1], r_lat, r_lon) for p in route_points)
+            rep["distance_to_route_meters"] = round(d_route, 1)
+
+            if d_route <= 800.0:
+                if status == "Confirmed":
+                    confirmed_floods.append(rep)
+                elif status == "Pending":
+                    pending_floods.append(rep)
+                elif status == "Disputed":
+                    disputed_floods.append(rep)
+
+        # Formulate data-honest warnings
+        warnings = []
+        flood_status = "none"
+
+        # 1. Weather condition alerts
+        if max_rain >= 15.0:
+            warnings.append(
+                f"Heavy Rainfall Warning: Heavy rain (up to {max_rain:.1f} mm/h) along route. "
+                "Roadways will be slick with high risk of surface ponding. Reduce speed."
+            )
+        elif max_rain >= 5.0:
+            warnings.append(
+                f"Moderate Rainfall Alert: Steady rain (up to {max_rain:.1f} mm/h) along corridor. "
+                "Drive with headlights and maintain safe braking distance."
+            )
+
+        if min_vis is not None and min_vis < 1000.0:
+            warnings.append(
+                f"Low Visibility Advisory: Visibility drops to {int(min_vis)}m in misty/rainy stretches. "
+                "Use fog lamps and maintain increased headway."
+            )
+
+        if max_wind >= 45.0:
+            warnings.append(
+                f"High Wind Advisory: Gusts up to {max_wind:.0f} km/h along open highway stretches."
+            )
+
+        # 2. Waterlogging distinction (Never equate rain forecast with road flooding!)
+        if len(confirmed_floods) > 0:
+            flood_status = "verified_flooding"
+            landmarks = [f.get("location_landmark") or f"km {round(f.get('distance_to_route_meters', 0))}" for f in confirmed_floods[:2]]
+            landmark_str = ", ".join(landmarks)
+            warnings.append(
+                f"Verified Road Flooding: {len(confirmed_floods)} confirmed waterlogging hazard(s) along route near {landmark_str}. "
+                "Consider the verified smart alternative route."
+            )
+        elif len(pending_floods) > 0:
+            flood_status = "pending_flooding"
+            warnings.append(
+                f"Community Notice: {len(pending_floods)} unverified waterlogging report(s) along route under review. "
+                "Authoritative safety score is preserved."
+            )
+        elif max_rain >= 10.0:
+            flood_status = "rain_ponding_risk"
+            warnings.append(
+                "Surface Water Notice: Sustained rainfall may cause localized water accumulation. "
+                "No verified road flooding reported on this corridor."
+            )
+
+        return jsonify({
+            "success": True,
+            "available": any_success,
+            "provider": "Open-Meteo Weather API",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "waypoints": waypoint_weathers,
+            "max_rainfall_mm": round(max_rain, 1),
+            "min_visibility_meters": round(min_vis, 0) if min_vis is not None else None,
+            "highest_wind_kmh": round(max_wind, 1),
+            "overall_condition": primary_condition,
+            "warnings": warnings,
+            "flood_status": flood_status,
+            "verified_waterlogging_hazards": confirmed_floods,
+            "pending_waterlogging_hazards": pending_floods,
+            "disputed_waterlogging_hazards": disputed_floods,
+        })
+    except Exception as exc:
+        return jsonify({
+            "success": False,
+            "error": str(exc),
+            "available": False,
+        }), 500
+
+
+
+# ==============================================================================
+# SHARED LOCATION NAVIGATION: PARSING, SSRF-SAFE RESOLUTION & REVERSE GEOCODING
+# ==============================================================================
+
+ALLOWED_MAPS_HOSTS = {
+    "maps.app.goo.gl",
+    "goo.gl",
+    "maps.google.com",
+    "www.google.com",
+    "google.com",
+    "maps.google.co.in",
+    "www.google.co.in",
+}
+
+
+def extract_coordinates_from_text(text):
+    if not text or not isinstance(text, str):
+        return None, None, None
+
+    text = text.strip()
+
+    # 1. @lat,lon (e.g. https://www.google.com/maps/@11.3410364,77.7171642,15z)
+    m = re.search(r'@(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)', text)
+    if m:
+        try:
+            return float(m.group(1)), float(m.group(2)), "google_maps_at_coord"
+        except (ValueError, TypeError):
+            pass
+
+    # 2. !3dlat!4dlon (Google Maps embed / place links)
+    m = re.search(r'!3d(-?\d{1,2}(?:\.\d+)?)[^!]*!4d(-?\d{1,3}(?:\.\d+)?)', text)
+    if m:
+        try:
+            return float(m.group(1)), float(m.group(2)), "google_maps_3d_4d"
+        except (ValueError, TypeError):
+            pass
+
+    # 3. q=lat,lon or query=lat,lon or ll=lat,lon
+    m = re.search(r'[?&](?:q|query|ll)=(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)', text)
+    if m:
+        try:
+            return float(m.group(1)), float(m.group(2)), "google_maps_query_param"
+        except (ValueError, TypeError):
+            pass
+
+    # 4. Direct plain coordinates: e.g. 11.3410, 77.7171 or Lat: 11.34, Lon: 77.71
+    m = re.search(
+        r'(?:^|[^\d.-])(?:lat(?:itude)?\s*[:=]?\s*)?(-?\d{1,2}(?:\.\d+)?)[,\s]+(?:lon(?:gitude)?\s*[:=]?\s*)?(-?\d{1,3}(?:\.\d+)?)(?:[^\d.-]|$)',
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        try:
+            return float(m.group(1)), float(m.group(2)), "direct_coordinates"
+        except (ValueError, TypeError):
+            pass
+
+    return None, None, None
+
+
+def is_safe_google_maps_url(url_str):
+    try:
+        parsed = urllib.parse.urlparse(url_str.strip())
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = parsed.netloc.lower().split(":")[0]
+        # Prevent SSRF: only allow verified Google Maps domains
+        return host in ALLOWED_MAPS_HOSTS
+    except Exception:
+        return False
+
+
+def reverse_geocode_nominatim(lat, lon, timeout_sec=3.0):
+    try:
+        url = f"https://nominatim.openstreetmap.org/reverse?lat={lat:.6f}&lon={lon:.6f}&format=json"
+        req = urllib.request.Request(url, headers={"User-Agent": "SafeRouteTN-Reverse/2.0"})
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            addr = data.get("address") or {}
+            road = addr.get("road") or addr.get("suburb") or addr.get("neighbourhood")
+            city = (
+                addr.get("city")
+                or addr.get("town")
+                or addr.get("village")
+                or addr.get("county")
+                or addr.get("state_district")
+            )
+            parts = [p for p in [road, city] if p]
+            if parts:
+                return ", ".join(parts)
+            return data.get("name") or data.get("display_name", "")[:50]
+    except Exception:
+        return None
+
+
+def resolve_short_maps_link(short_url, timeout_sec=5.0):
+    if not is_safe_google_maps_url(short_url):
+        return None, "URL is not a permitted Google Maps domain"
+
+    class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            if not is_safe_google_maps_url(newurl):
+                return None
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    opener = urllib.request.build_opener(SafeRedirectHandler)
+    req = urllib.request.Request(short_url, headers={"User-Agent": "SafeRouteTN/2.0"})
+    try:
+        with opener.open(req, timeout=timeout_sec) as resp:
+            final_url = resp.geturl()
+            lat, lon, fmt = extract_coordinates_from_text(final_url)
+            if lat is not None and lon is not None:
+                return (lat, lon, final_url), None
+
+            content = resp.read().decode("utf-8", errors="ignore")
+            lat, lon, fmt = extract_coordinates_from_text(content)
+            if lat is not None and lon is not None:
+                return (lat, lon, final_url), None
+
+            return None, "Could not extract coordinates from resolved Google Maps URL"
+    except Exception as exc:
+        return None, f"Failed to resolve short link: {str(exc)}"
+
+
+@app.route("/resolve-shared-location", methods=["POST", "OPTIONS"])
+def resolve_shared_location():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+
+    try:
+        data = request.get_json(silent=True) or {}
+        shared_text = data.get("shared_text") or data.get("input") or data.get("text") or data.get("url")
+        if not shared_text or not isinstance(shared_text, str):
+            return jsonify({
+                "success": False,
+                "error": "shared_text is required and must be a non-empty string",
+            }), 400
+
+        text = shared_text.strip()
+
+        # Security check: If text contains URLs, reject disallowed/untrusted hosts
+        found_urls = re.findall(r'https?://[^\s<>"]+', text)
+        for u in found_urls:
+            clean_u = re.sub(r'[\.,;:\)\]]+$', '', u)
+            if not is_safe_google_maps_url(clean_u):
+                return jsonify({
+                    "success": False,
+                    "error": "Disallowed or untrusted URL. Only official Google Maps links are supported."
+                }), 400
+
+        # Step 1: Direct extraction from text/URL
+        lat, lon, fmt = extract_coordinates_from_text(text)
+        resolved_url = None
+
+        # Step 2: Check for Google Maps short links (e.g. maps.app.goo.gl or goo.gl/maps)
+        if lat is None or lon is None:
+            short_match = re.search(r'https?://(?:maps\.app\.goo\.gl|goo\.gl/maps)/[a-zA-Z0-9_-]+', text)
+            if short_match:
+                short_url = short_match.group(0)
+                res, err = resolve_short_maps_link(short_url)
+                if res:
+                    lat, lon, resolved_url = res
+                    fmt = "google_maps_short_link"
+                else:
+                    return jsonify({
+                        "success": False,
+                        "error": err or "Failed to resolve Google Maps short link",
+                    }), 400
+
+        if lat is None or lon is None:
+            return jsonify({
+                "success": False,
+                "error": "Could not identify valid geographic coordinates in the shared link or text. Supported formats include Google Maps links, short links, or latitude/longitude coordinates.",
+            }), 400
+
+        # Step 3: Range validation
+        if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+            return jsonify({
+                "success": False,
+                "error": f"Coordinates out of valid range: latitude must be between -90 and 90, longitude between -180 and 180 (got {lat}, {lon})",
+            }), 400
+
+        # Step 4: Reverse geocoding for friendly destination name
+        friendly_name = reverse_geocode_nominatim(lat, lon)
+        if not friendly_name:
+            friendly_name = f"Shared Location ({lat:.4f}, {lon:.4f})"
+
+        return jsonify({
+            "success": True,
+            "latitude": round(lat, 6),
+            "longitude": round(lon, 6),
+            "name": friendly_name,
+            "display_name": friendly_name,
+            "source_format": fmt,
+            "resolved_url": resolved_url,
+        })
+    except Exception as exc:
+        return jsonify({
+            "success": False,
+            "error": str(exc),
+        }), 500
+
+# ============================================================================
+# LIVE TRIP SHARING & SAFE ARRIVAL ENDPOINTS
+# ============================================================================
+
+@app.route("/api/trip/create_share", methods=["POST", "OPTIONS"])
+def create_trip_share():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    try:
+        data = request.get_json(silent=True) or {}
+        destination = data.get("destination")
+        if not destination or not isinstance(destination, str) or not destination.strip():
+            return jsonify({"success": False, "error": "destination is required and must be a non-empty string"}), 400
+
+        destination = destination.strip()
+        origin = data.get("origin")
+        if isinstance(origin, str):
+            origin = origin.strip()
+        else:
+            origin = None
+
+        vehicle = data.get("vehicle", "Car")
+        if not isinstance(vehicle, str):
+            vehicle = "Car"
+
+        eta_minutes = data.get("eta_minutes")
+        if eta_minutes is not None:
+            try:
+                eta_minutes = int(eta_minutes)
+            except (ValueError, TypeError):
+                eta_minutes = None
+
+        lat = data.get("latitude")
+        lon = data.get("longitude")
+        if lat is not None and lon is not None:
+            try:
+                lat = float(lat)
+                lon = float(lon)
+                if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+                    return jsonify({"success": False, "error": "Coordinates out of valid range"}), 400
+            except (ValueError, TypeError):
+                return jsonify({"success": False, "error": "Coordinates must be numbers"}), 400
+        else:
+            lat = None
+            lon = None
+
+        heading = data.get("heading")
+        if heading is not None:
+            try:
+                heading = float(heading)
+            except (ValueError, TypeError):
+                heading = None
+
+        speed = data.get("speed")
+        if speed is not None:
+            try:
+                speed = float(speed)
+            except (ValueError, TypeError):
+                speed = None
+
+        accuracy = data.get("accuracy")
+        if accuracy is not None:
+            try:
+                accuracy = float(accuracy)
+            except (ValueError, TypeError):
+                accuracy = None
+
+        share_token = secrets.token_urlsafe(16)
+        update_token = secrets.token_urlsafe(24)
+        now_dt = datetime.now(timezone.utc)
+        created_at = now_dt.isoformat()
+        expires_at = (now_dt + timedelta(hours=12)).isoformat()
+
+        init_feedback_db()
+        with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO live_shared_trips (
+                    share_token, update_token, origin, destination, vehicle, eta_minutes,
+                    status, latitude, longitude, heading, speed, accuracy,
+                    created_at, updated_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    share_token, update_token, origin, destination, vehicle, eta_minutes,
+                    lat, lon, heading, speed, accuracy,
+                    created_at, created_at, expires_at
+                )
+            )
+            conn.commit()
+
+        return jsonify({
+            "success": True,
+            "share_token": share_token,
+            "update_token": update_token,
+            "status": "active",
+            "destination": destination,
+            "origin": origin,
+            "vehicle": vehicle,
+            "eta_minutes": eta_minutes,
+            "expires_at": expires_at,
+            "created_at": created_at,
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.route("/api/trip/update_location", methods=["POST", "OPTIONS"])
+def update_trip_location():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    try:
+        data = request.get_json(silent=True) or {}
+        update_token = data.get("update_token")
+        if not update_token or not isinstance(update_token, str):
+            return jsonify({"success": False, "error": "update_token is required"}), 401
+
+        lat = data.get("latitude")
+        lon = data.get("longitude")
+        if lat is None or lon is None:
+            return jsonify({"success": False, "error": "latitude and longitude are required"}), 400
+        try:
+            lat = float(lat)
+            lon = float(lon)
+            if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+                return jsonify({"success": False, "error": "Coordinates out of valid range"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "error": "Coordinates must be numbers"}), 400
+
+        heading = data.get("heading")
+        if heading is not None:
+            try:
+                heading = float(heading)
+            except (ValueError, TypeError):
+                heading = None
+
+        speed = data.get("speed")
+        if speed is not None:
+            try:
+                speed = float(speed)
+            except (ValueError, TypeError):
+                speed = None
+
+        accuracy = data.get("accuracy")
+        if accuracy is not None:
+            try:
+                accuracy = float(accuracy)
+            except (ValueError, TypeError):
+                accuracy = None
+
+        eta_minutes = data.get("eta_minutes")
+        if eta_minutes is not None:
+            try:
+                eta_minutes = int(eta_minutes)
+            except (ValueError, TypeError):
+                eta_minutes = None
+
+        req_status = data.get("status")
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat()
+
+        init_feedback_db()
+        with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM live_shared_trips WHERE update_token = ?", (update_token,))
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({"success": False, "error": "Invalid update token or session not found"}), 404
+
+            # Expiration check
+            expires_at = datetime.fromisoformat(row["expires_at"])
+            if now_dt > expires_at:
+                return jsonify({"success": False, "error": "Trip sharing session has expired", "status": "expired"}), 410
+
+            current_status = row["status"]
+            if current_status in ("stopped", "completed"):
+                return jsonify({"success": False, "error": f"Cannot update location for {current_status} trip", "status": current_status}), 400
+
+            new_status = current_status
+            if req_status in ("active", "paused"):
+                new_status = req_status
+
+            cursor.execute(
+                """
+                UPDATE live_shared_trips
+                SET latitude = ?, longitude = ?, heading = ?, speed = ?, accuracy = ?,
+                    eta_minutes = COALESCE(?, eta_minutes), status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (lat, lon, heading, speed, accuracy, eta_minutes, new_status, now_iso, row["id"])
+            )
+            conn.commit()
+
+        return jsonify({
+            "success": True,
+            "status": new_status,
+            "updated_at": now_iso
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.route("/api/trip/status/<share_token>", methods=["GET"])
+def get_trip_status(share_token):
+    try:
+        if not share_token or not isinstance(share_token, str):
+            return jsonify({"success": False, "error": "Invalid share token"}), 400
+
+        now_dt = datetime.now(timezone.utc)
+        init_feedback_db()
+        with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM live_shared_trips WHERE share_token = ?", (share_token.strip(),))
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({"success": False, "error": "Shared trip not found"}), 404
+
+            expires_at = datetime.fromisoformat(row["expires_at"])
+            if now_dt > expires_at:
+                return jsonify({
+                    "success": True,
+                    "status": "expired",
+                    "destination": row["destination"],
+                    "message": "This trip sharing session has expired."
+                })
+
+            status = row["status"]
+            if status == "stopped":
+                return jsonify({
+                    "success": True,
+                    "status": "stopped",
+                    "destination": row["destination"],
+                    "message": "Trip sharing was stopped by the user."
+                })
+
+            if status == "completed":
+                return jsonify({
+                    "success": True,
+                    "status": "completed",
+                    "destination": row["destination"],
+                    "origin": row["origin"],
+                    "vehicle": row["vehicle"],
+                    "completed_at": row["updated_at"],
+                    "message": f"Arrived safely at {row['destination']}."
+                })
+
+            updated_dt = datetime.fromisoformat(row["updated_at"])
+            stale_seconds = max(0, int((now_dt - updated_dt).total_seconds()))
+            is_stale = stale_seconds > 120
+
+            return jsonify({
+                "success": True,
+                "status": status,
+                "origin": row["origin"],
+                "destination": row["destination"],
+                "vehicle": row["vehicle"],
+                "eta_minutes": row["eta_minutes"],
+                "latitude": row["latitude"],
+                "longitude": row["longitude"],
+                "heading": row["heading"],
+                "speed": row["speed"],
+                "accuracy": row["accuracy"],
+                "updated_at": row["updated_at"],
+                "is_stale": is_stale,
+                "stale_seconds": stale_seconds
+            })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.route("/api/trip/stop_sharing", methods=["POST", "OPTIONS"])
+def stop_trip_sharing():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    try:
+        data = request.get_json(silent=True) or {}
+        update_token = data.get("update_token")
+        if not update_token or not isinstance(update_token, str):
+            return jsonify({"success": False, "error": "update_token is required"}), 401
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        init_feedback_db()
+        with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM live_shared_trips WHERE update_token = ?", (update_token,))
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({"success": False, "error": "Session not found"}), 404
+
+            # Privacy: clear coordinates upon stopping
+            cursor.execute(
+                """
+                UPDATE live_shared_trips
+                SET status = 'stopped', latitude = NULL, longitude = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (now_iso, row["id"])
+            )
+            conn.commit()
+
+        return jsonify({"success": True, "status": "stopped", "message": "Live trip sharing has stopped."})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.route("/api/trip/complete_trip", methods=["POST", "OPTIONS"])
+def complete_trip_sharing():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    try:
+        data = request.get_json(silent=True) or {}
+        update_token = data.get("update_token")
+        if not update_token or not isinstance(update_token, str):
+            return jsonify({"success": False, "error": "update_token is required"}), 401
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        init_feedback_db()
+        with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, destination FROM live_shared_trips WHERE update_token = ?", (update_token,))
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({"success": False, "error": "Session not found"}), 404
+
+            cursor.execute(
+                """
+                UPDATE live_shared_trips
+                SET status = 'completed', updated_at = ?
+                WHERE id = ?
+                """,
+                (now_iso, row["id"])
+            )
+            conn.commit()
+
+        return jsonify({
+            "success": True,
+            "status": "completed",
+            "destination": row["destination"],
+            "message": f"Trip marked as completed. Safe arrival confirmed at {row['destination']}."
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
 
 if __name__ == "__main__":
     app.run(
