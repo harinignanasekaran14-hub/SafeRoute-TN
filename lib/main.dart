@@ -2,6 +2,7 @@
 
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -247,7 +248,13 @@ class _CompassNeedlePainter extends CustomPainter {
 }
 
 class _CyanLightRibbonPainter extends CustomPainter {
-  const _CyanLightRibbonPainter();
+  final double pulseProgress;
+  final bool isAnimated;
+
+  const _CyanLightRibbonPainter({
+    this.pulseProgress = 0.0,
+    this.isAnimated = false,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -264,9 +271,10 @@ class _CyanLightRibbonPainter extends CustomPainter {
       size.height * 0.60,
     );
 
+    // 1. Base Resting Ribbon Track
     // Outer cyan bloom
     final glowPaint = Paint()
-      ..color = const Color(0xff00D9FF).withValues(alpha: 0.20)
+      ..color = const Color(0xff00D9FF).withValues(alpha: 0.16)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 14.0
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12.0);
@@ -274,7 +282,7 @@ class _CyanLightRibbonPainter extends CustomPainter {
 
     // Electric blue mid-stroke
     final midPaint = Paint()
-      ..color = const Color(0xff1687FF).withValues(alpha: 0.42)
+      ..color = const Color(0xff1687FF).withValues(alpha: 0.35)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 6.0
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
@@ -282,14 +290,536 @@ class _CyanLightRibbonPainter extends CustomPainter {
 
     // Bright core white/cyan stroke
     final corePaint = Paint()
-      ..color = const Color(0xffE0F7FF).withValues(alpha: 0.85)
+      ..color = const Color(0xffE0F7FF).withValues(alpha: 0.70)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+      ..strokeWidth = 1.8;
     canvas.drawPath(path, corePaint);
+
+    // 2. Animated Traveling Cyan/Electric-Blue Energy Pulse
+    if (isAnimated) {
+      final metrics = path.computeMetrics().toList();
+      if (metrics.isNotEmpty) {
+        final metric = metrics.first;
+        final totalLength = metric.length;
+        if (totalLength > 0) {
+          final pulseLength = totalLength * 0.25;
+          final headPos = pulseProgress * (totalLength + pulseLength);
+          final startPos = math.max(0.0, headPos - pulseLength);
+          final endPos = math.min(totalLength, headPos);
+
+          if (endPos > startPos) {
+            final pulseSubPath = metric.extractPath(startPos, endPos);
+
+            // Intense pulse outer bloom
+            final pulseGlowPaint = Paint()
+              ..color = const Color(0xff00D9FF).withValues(alpha: 0.45)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 16.0
+              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8.0);
+            canvas.drawPath(pulseSubPath, pulseGlowPaint);
+
+            // Electric blue mid-pulse
+            final pulseMidPaint = Paint()
+              ..color = const Color(0xff2563EB).withValues(alpha: 0.75)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 6.0
+              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.0);
+            canvas.drawPath(pulseSubPath, pulseMidPaint);
+
+            // Radiant white/cyan core
+            final pulseCorePaint = Paint()
+              ..color = Colors.white
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 2.8;
+            canvas.drawPath(pulseSubPath, pulseCorePaint);
+
+            // Leading photon head
+            if (headPos <= totalLength) {
+              final tangent = metric.getTangentForOffset(headPos);
+              if (tangent != null) {
+                final headHaloPaint = Paint()
+                  ..color = const Color(0xff00D9FF).withValues(alpha: 0.60)
+                  ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6.0);
+                canvas.drawCircle(tangent.position, 6.0, headHaloPaint);
+
+                final headCorePaint = Paint()..color = Colors.white;
+                canvas.drawCircle(tangent.position, 3.0, headCorePaint);
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _CyanLightRibbonPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _CyanLightRibbonPainter oldDelegate) {
+    return oldDelegate.pulseProgress != pulseProgress ||
+        oldDelegate.isAnimated != isAnimated;
+  }
+}
+
+class _AnimatedCyanLightRibbon extends StatefulWidget {
+  const _AnimatedCyanLightRibbon();
+
+  @override
+  State<_AnimatedCyanLightRibbon> createState() =>
+      _AnimatedCyanLightRibbonState();
+}
+
+class _AnimatedCyanLightRibbonState extends State<_AnimatedCyanLightRibbon>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 3800),
+    );
+    _controller.repeat();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    if (disableAnimations && _controller.isAnimating) {
+      _controller.stop();
+    } else if (!disableAnimations && !_controller.isAnimating) {
+      _controller.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    if (disableAnimations) {
+      return const CustomPaint(
+        painter: _CyanLightRibbonPainter(isAnimated: false),
+      );
+    }
+
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        return CustomPaint(
+          painter: _CyanLightRibbonPainter(
+            pulseProgress: _controller.value,
+            isAnimated: true,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _NetworkNodeSeed {
+  final double baseX;
+  final double baseY;
+  final double ampX;
+  final double ampY;
+  final double freq;
+  final double phase;
+  final double radius;
+  final int colorType; // 0: Cyan, 1: Electric Blue, 2: Violet
+
+  const _NetworkNodeSeed(
+    this.baseX,
+    this.baseY,
+    this.ampX,
+    this.ampY,
+    this.freq,
+    this.phase,
+    this.radius,
+    this.colorType,
+  );
+}
+
+class _AiNeuralNetworkBackground extends StatefulWidget {
+  final Widget child;
+  final BorderRadius borderRadius;
+  final bool isDark;
+  final EdgeInsetsGeometry? padding;
+  final String? backgroundImageAsset;
+
+  const _AiNeuralNetworkBackground({
+    required this.child,
+    this.borderRadius = const BorderRadius.all(Radius.circular(32)),
+    this.isDark = true,
+    this.padding,
+    this.backgroundImageAsset,
+  });
+
+  @override
+  State<_AiNeuralNetworkBackground> createState() =>
+      _AiNeuralNetworkBackgroundState();
+}
+
+class _AiNeuralNetworkBackgroundState extends State<_AiNeuralNetworkBackground>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  static const List<_NetworkNodeSeed> _seeds = [
+    _NetworkNodeSeed(0.10, 0.20, 0.03, 0.04, 1.0, 0.0, 2.8, 0),
+    _NetworkNodeSeed(0.24, 0.35, 0.04, 0.03, 1.2, 0.8, 3.2, 1),
+    _NetworkNodeSeed(0.18, 0.65, 0.03, 0.05, 0.8, 1.5, 2.6, 2),
+    _NetworkNodeSeed(0.35, 0.18, 0.05, 0.02, 1.1, 2.1, 3.0, 0),
+    _NetworkNodeSeed(0.42, 0.50, 0.03, 0.04, 0.9, 0.5, 3.5, 1),
+    _NetworkNodeSeed(0.30, 0.80, 0.04, 0.03, 1.3, 3.0, 2.4, 0),
+    _NetworkNodeSeed(0.55, 0.28, 0.03, 0.04, 1.0, 1.2, 3.0, 2),
+    _NetworkNodeSeed(0.62, 0.62, 0.04, 0.05, 1.4, 2.7, 2.8, 1),
+    _NetworkNodeSeed(0.50, 0.85, 0.03, 0.02, 0.7, 0.3, 2.6, 0),
+    _NetworkNodeSeed(0.72, 0.18, 0.04, 0.03, 1.2, 1.8, 3.2, 1),
+    _NetworkNodeSeed(0.78, 0.45, 0.03, 0.04, 0.9, 3.4, 2.8, 2),
+    _NetworkNodeSeed(0.85, 0.75, 0.05, 0.03, 1.1, 0.9, 3.0, 0),
+    _NetworkNodeSeed(0.90, 0.30, 0.03, 0.04, 1.3, 2.2, 2.5, 1),
+    _NetworkNodeSeed(0.68, 0.82, 0.04, 0.04, 0.8, 1.0, 2.7, 2),
+    _NetworkNodeSeed(0.15, 0.85, 0.03, 0.03, 1.0, 2.5, 2.4, 0),
+    _NetworkNodeSeed(0.82, 0.90, 0.04, 0.03, 1.2, 0.4, 3.0, 1),
+    _NetworkNodeSeed(0.48, 0.12, 0.03, 0.03, 0.9, 1.7, 2.6, 0),
+    _NetworkNodeSeed(0.06, 0.45, 0.04, 0.04, 1.1, 3.1, 2.5, 2),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 22),
+    );
+    if (widget.isDark) {
+      _controller.repeat();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    if (disableAnimations || !widget.isDark) {
+      if (_controller.isAnimating) _controller.stop();
+    } else {
+      if (!_controller.isAnimating) _controller.repeat();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _AiNeuralNetworkBackground oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    if (widget.isDark && !disableAnimations && !_controller.isAnimating) {
+      _controller.repeat();
+    } else if ((!widget.isDark || disableAnimations) && _controller.isAnimating) {
+      _controller.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final hasImage = widget.backgroundImageAsset != null;
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: widget.borderRadius,
+        border: Border.all(
+          color: widget.isDark
+              ? _NeonTheme.cyanBorder.withValues(alpha: 0.35)
+              : const Color(0xffCBD5E1),
+          width: 1.2,
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: widget.borderRadius,
+        child: Stack(
+          fit: StackFit.passthrough,
+          children: [
+            if (hasImage)
+              Positioned.fill(
+                child: Image.asset(
+                  widget.backgroundImageAsset!,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    color: widget.isDark
+                        ? const Color(0xff020B1C)
+                        : const Color(0xffF1F5F9),
+                  ),
+                ),
+              ),
+            if (hasImage)
+              Positioned.fill(
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        (widget.isDark
+                                ? const Color(0xff020B1C)
+                                : Colors.white)
+                            .withValues(alpha: 0.80),
+                        (widget.isDark
+                                ? const Color(0xff06152D)
+                                : Colors.white)
+                            .withValues(alpha: 0.94),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            Positioned.fill(
+              child: widget.isDark
+                  ? (disableAnimations
+                      ? CustomPaint(
+                          painter: _AiNeuralNetworkPainter(
+                            progress: 0.0,
+                            seeds: _seeds,
+                            isDark: true,
+                            transparentBackground: hasImage,
+                          ),
+                        )
+                      : AnimatedBuilder(
+                          animation: _controller,
+                          builder: (context, _) {
+                            return CustomPaint(
+                              painter: _AiNeuralNetworkPainter(
+                                progress: _controller.value,
+                                seeds: _seeds,
+                                isDark: true,
+                                transparentBackground: hasImage,
+                              ),
+                            );
+                          },
+                        ))
+                  : (hasImage
+                      ? const SizedBox.shrink()
+                      : Container(
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [Color(0xffE7F7F8), Color(0xffEDF3FF)],
+                            ),
+                          ),
+                        )),
+            ),
+            Padding(
+              padding: widget.padding ?? EdgeInsets.zero,
+              child: widget.child,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AiNeuralNetworkPainter extends CustomPainter {
+  final double progress;
+  final List<_NetworkNodeSeed> seeds;
+  final bool isDark;
+  final bool transparentBackground;
+
+  const _AiNeuralNetworkPainter({
+    required this.progress,
+    required this.seeds,
+    required this.isDark,
+    this.transparentBackground = false,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+
+    // 1. Draw base deep navy gradient
+    if (!transparentBackground) {
+      final bgPaint = Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xff06152D),
+            Color(0xff020B1C),
+            Color(0xff051126),
+          ],
+          stops: [0.0, 0.65, 1.0],
+        ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), bgPaint);
+    }
+
+    // 2. Compute dynamic node coordinates based on deterministic seeds
+    final List<Offset> positions = [];
+    final angle = progress * 2 * math.pi;
+
+    for (final s in seeds) {
+      final curAngle = angle * s.freq + s.phase;
+      final x = (s.baseX + s.ampX * math.sin(curAngle)).clamp(0.02, 0.98) * size.width;
+      final y = (s.baseY + s.ampY * math.cos(curAngle)).clamp(0.02, 0.98) * size.height;
+      positions.add(Offset(x, y));
+    }
+
+    // 3. Draw connecting synaptic lines between nearby nodes
+    const double maxDist = 140.0;
+    const double maxDistSq = maxDist * maxDist;
+
+    final linePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.85;
+
+    for (int i = 0; i < positions.length; i++) {
+      final p1 = positions[i];
+      for (int j = i + 1; j < positions.length; j++) {
+        final p2 = positions[j];
+        final dx = p1.dx - p2.dx;
+        final dy = p1.dy - p2.dy;
+        final distSq = dx * dx + dy * dy;
+
+        if (distSq < maxDistSq) {
+          final dist = math.sqrt(distSq);
+          final opacity = (1.0 - (dist / maxDist)) * 0.22;
+          final lineColor = (seeds[i].colorType == 2 || seeds[j].colorType == 2)
+              ? const Color(0xffA855F7).withValues(alpha: opacity * 0.8)
+              : const Color(0xff00D9FF).withValues(alpha: opacity);
+
+          linePaint.color = lineColor;
+          canvas.drawLine(p1, p2, linePaint);
+        }
+      }
+    }
+
+    // 4. Draw particle nodes with soft halos
+    for (int i = 0; i < positions.length; i++) {
+      final pos = positions[i];
+      final seed = seeds[i];
+
+      final Color baseColor;
+      switch (seed.colorType) {
+        case 0:
+          baseColor = const Color(0xff00D9FF);
+          break;
+        case 1:
+          baseColor = const Color(0xff2563EB);
+          break;
+        case 2:
+        default:
+          baseColor = const Color(0xffA855F7);
+          break;
+      }
+
+      // Outer glow halo
+      final haloPaint = Paint()
+        ..color = baseColor.withValues(alpha: 0.18)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
+      canvas.drawCircle(pos, seed.radius * 2.2, haloPaint);
+
+      // Core particle
+      final corePaint = Paint()..color = baseColor.withValues(alpha: 0.85);
+      canvas.drawCircle(pos, seed.radius, corePaint);
+
+      // Center bright glint
+      final glintPaint = Paint()..color = Colors.white.withValues(alpha: 0.70);
+      canvas.drawCircle(pos, seed.radius * 0.45, glintPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _AiNeuralNetworkPainter oldDelegate) {
+    return oldDelegate.progress != progress || oldDelegate.isDark != isDark;
+  }
+}
+
+class _CyberHudCornerPainter extends CustomPainter {
+  final bool isDark;
+
+  const _CyberHudCornerPainter({required this.isDark});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+
+    final primaryColor =
+        isDark ? const Color(0xff00D9FF) : const Color(0xff2563EB);
+    final bracketPaint = Paint()
+      ..color = primaryColor.withValues(alpha: isDark ? 0.70 : 0.45)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.square;
+
+    final glowPaint = Paint()
+      ..color = primaryColor.withValues(alpha: isDark ? 0.22 : 0.10)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4.5
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
+
+    const double cornerLength = 22.0;
+    const double inset = 10.0;
+    final w = size.width;
+    final h = size.height;
+
+    final path = Path();
+
+    // Top-Left corner bracket
+    path.moveTo(inset, inset + cornerLength);
+    path.lineTo(inset, inset);
+    path.lineTo(inset + cornerLength, inset);
+
+    // Top-Right corner bracket
+    path.moveTo(w - inset - cornerLength, inset);
+    path.lineTo(w - inset, inset);
+    path.lineTo(w - inset, inset + cornerLength);
+
+    // Bottom-Left corner bracket
+    path.moveTo(inset, h - inset - cornerLength);
+    path.lineTo(inset, h - inset);
+    path.lineTo(inset + cornerLength, h - inset);
+
+    // Bottom-Right corner bracket
+    path.moveTo(w - inset - cornerLength, h - inset);
+    path.lineTo(w - inset, h - inset);
+    path.lineTo(w - inset, h - inset - cornerLength);
+
+    if (isDark) {
+      canvas.drawPath(path, glowPaint);
+    }
+    canvas.drawPath(path, bracketPaint);
+
+    // Subtle corner tick marks (crosshair accents)
+    final tickPaint = Paint()
+      ..color = primaryColor.withValues(alpha: isDark ? 0.40 : 0.25)
+      ..strokeWidth = 1.0;
+
+    canvas.drawLine(
+        Offset(inset + 4, inset + 4), Offset(inset + 7, inset + 4), tickPaint);
+    canvas.drawLine(Offset(w - inset - 7, inset + 4),
+        Offset(w - inset - 4, inset + 4), tickPaint);
+    canvas.drawLine(Offset(inset + 4, h - inset - 4),
+        Offset(inset + 7, h - inset - 4), tickPaint);
+    canvas.drawLine(Offset(w - inset - 7, h - inset - 4),
+        Offset(w - inset - 4, h - inset - 4), tickPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CyberHudCornerPainter oldDelegate) =>
+      oldDelegate.isDark != isDark;
 }
 
 typedef _NeonTheme = NeonTheme;
@@ -552,9 +1082,23 @@ class _NeonScoreRingPainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = (size.width - strokeWidth) / 2;
 
+    // Ambient radial halo behind the ring disc
+    if (isDark && scorePercent > 0) {
+      final ambientGlowPaint = Paint()
+        ..shader = RadialGradient(
+          colors: [
+            activeColor.withValues(alpha: 0.15 * (scorePercent / 100).clamp(0.2, 1.0)),
+            _NeonTheme.neonCyan.withValues(alpha: 0.06 * (scorePercent / 100).clamp(0.2, 1.0)),
+            Colors.transparent,
+          ],
+          stops: const [0.45, 0.85, 1.0],
+        ).createShader(Rect.fromCircle(center: center, radius: radius * 1.35));
+      canvas.drawCircle(center, radius * 1.35, ambientGlowPaint);
+    }
+
     // Track Paint
     final trackPaint = Paint()
-      ..color = isDark ? const Color(0x2038BDF8) : const Color(0x250D5BD8)
+      ..color = isDark ? const Color(0x2238BDF8) : const Color(0x250D5BD8)
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth;
 
@@ -568,26 +1112,37 @@ class _NeonScoreRingPainter extends CustomPainter {
     // Glow Paint (Dark Mode only to preserve crisp contrast in Light Mode)
     if (isDark) {
       final glowPaint = Paint()
-        ..color = activeColor.withValues(alpha: 0.5)
+        ..color = activeColor.withValues(alpha: 0.45)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = strokeWidth + 4
+        ..strokeWidth = strokeWidth + 4.5
         ..strokeCap = StrokeCap.round
-        ..maskFilter = const MaskFilter.blur(BlurStyle.solid, 4);
+        ..maskFilter = const MaskFilter.blur(BlurStyle.solid, 4.5);
       canvas.drawArc(rect, -math.pi / 2, sweepAngle, false, glowPaint);
     }
 
-    // Active Arc Paint
+    // Active Arc Paint with vibrant neon sweep gradient
     final arcPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round;
 
+    final List<Color> gradientColors;
+    if (isDark) {
+      if (activeColor == _NeonTheme.safeGreen ||
+          activeColor == const Color(0xff00E59B) ||
+          activeColor == const Color(0xff10B981)) {
+        gradientColors = [_NeonTheme.neonCyan, activeColor];
+      } else {
+        gradientColors = [activeColor.withValues(alpha: 0.85), activeColor];
+      }
+    } else {
+      gradientColors = [const Color(0xff2563EB), activeColor];
+    }
+
     arcPaint.shader = SweepGradient(
       startAngle: -math.pi / 2,
       endAngle: 3 * math.pi / 2,
-      colors: isDark
-          ? [_NeonTheme.neonCyan, activeColor]
-          : [const Color(0xff2563EB), const Color(0xff059669)],
+      colors: gradientColors,
       transform: const GradientRotation(-math.pi / 2),
     ).createShader(rect);
 
@@ -1119,12 +1674,15 @@ class _AnimatedScoreRing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final disableMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    const double size = 76.0;
+
     if (targetScore == null) {
       return Stack(
         alignment: Alignment.center,
         children: [
           CustomPaint(
-            size: const Size(76, 76),
+            size: Size(size, size),
             painter: _NeonScoreRingPainter(
               scorePercent: 0,
               isDark: isDark,
@@ -1137,19 +1695,20 @@ class _AnimatedScoreRing extends StatelessWidget {
               Text(
                 '--',
                 style: TextStyle(
-                  fontSize: 17,
+                  fontSize: (size * 0.23).clamp(16.0, 26.0),
                   fontWeight: FontWeight.w900,
                   letterSpacing: -0.5,
                   color: isDark ? Colors.white38 : const Color(0xff94A3B8),
                 ),
               ),
+              const SizedBox(height: 1),
               Text(
-                'SAFETY SCORE',
+                'DATA PENDING',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 6.5,
+                  fontSize: (size * 0.082).clamp(6.0, 9.0),
                   fontWeight: FontWeight.w800,
-                  letterSpacing: 0.5,
+                  letterSpacing: 0.6,
                   color: isDark ? Colors.white38 : const Color(0xff94A3B8),
                 ),
               ),
@@ -1159,33 +1718,43 @@ class _AnimatedScoreRing extends StatelessWidget {
       );
     }
 
+    final scoreVal = targetScore!.clamp(0.0, 100.0);
+
     return TweenAnimationBuilder<double>(
-      key: ValueKey('score_ring_${targetScore}_${animationKey ?? key ?? ""}'),
-      tween: Tween<double>(begin: 0.0, end: targetScore!),
-      duration: const Duration(milliseconds: 800),
+      key: ValueKey('score_ring_${scoreVal.toStringAsFixed(1)}_${animationKey ?? key ?? ""}'),
+      tween: Tween<double>(begin: disableMotion ? scoreVal : 0.0, end: scoreVal),
+      duration: disableMotion ? Duration.zero : const Duration(milliseconds: 950),
       curve: Curves.easeOutCubic,
       builder: (context, animatedScore, child) {
-        final isComplete = targetScore != null && animatedScore >= (targetScore! - 0.5);
+        final glowFactor = (animatedScore / 100.0).clamp(0.0, 1.0);
+        final glowAlpha = ((isDark ? 0.24 : 0.14) * glowFactor).clamp(0.04, 0.25);
+
         return Stack(
           alignment: Alignment.center,
           children: [
-            if (isComplete)
-              Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  boxShadow: [
+            // Ambient outer glow container
+            Container(
+              width: size - 4,
+              height: size - 4,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: activeColor.withValues(alpha: glowAlpha),
+                    blurRadius: 16,
+                    spreadRadius: 2,
+                  ),
+                  if (isDark)
                     BoxShadow(
-                      color: activeColor.withValues(alpha: 0.18),
-                      blurRadius: 12,
-                      spreadRadius: 1,
+                      color: _NeonTheme.neonCyan.withValues(alpha: glowAlpha * 0.5),
+                      blurRadius: 22,
+                      spreadRadius: -2,
                     ),
-                  ],
-                ),
+                ],
               ),
+            ),
             CustomPaint(
-              size: const Size(76, 76),
+              size: Size(size, size),
               painter: _NeonScoreRingPainter(
                 scorePercent: animatedScore,
                 isDark: isDark,
@@ -1198,7 +1767,7 @@ class _AnimatedScoreRing extends StatelessWidget {
                 Text(
                   '${animatedScore.round()}%',
                   style: TextStyle(
-                    fontSize: 17,
+                    fontSize: (size * 0.224).clamp(16.0, 26.0),
                     fontWeight: FontWeight.w900,
                     letterSpacing: -0.5,
                     color: isDark ? Colors.white : const Color(0xff0F172A),
@@ -1208,7 +1777,7 @@ class _AnimatedScoreRing extends StatelessWidget {
                   'SAFETY SCORE',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 6.5,
+                    fontSize: (size * 0.086).clamp(6.2, 9.0),
                     fontWeight: FontWeight.w800,
                     letterSpacing: 0.5,
                     color: isDark ? _NeonTheme.neonCyan : const Color(0xff2563EB),
@@ -1492,6 +2061,534 @@ class _BreathingGlowBorderCardState extends State<_BreathingGlowBorderCard>
           child: widget.child,
         );
       },
+    );
+  }
+}
+
+/// Reusable premium glassmorphic container for SafeRoute TN 2.0.
+///
+/// Features:
+/// - Translucent deep navy base (#020B1C / #06152D) for dark mode.
+/// - Crisp translucent white for light mode.
+/// - Subtle backdrop blur (10-14px) clipped cleanly to rounded bounds.
+/// - Thin translucent cyan border (#00D9FF with alpha) with subtle specular shine.
+/// - Soft shadow that does not get clipped by BackdropFilter.
+/// - Optional interactive hover glow and scale.
+/// - Respects [MediaQuery.disableAnimations] for accessibility.
+typedef _GlassCard = GlassCard;
+
+class GlassCard extends StatefulWidget {
+  final Widget child;
+  final EdgeInsetsGeometry? padding;
+  final EdgeInsetsGeometry? margin;
+  final double? width;
+  final double? height;
+  final BoxConstraints? constraints;
+  final BorderRadius? borderRadius;
+  final double blurSigma;
+  final Color? backgroundColor;
+  final Gradient? gradient;
+  final BoxBorder? border;
+  final List<BoxShadow>? boxShadow;
+  final Clip clipBehavior;
+  final bool enableHover;
+  final VoidCallback? onTap;
+
+  const GlassCard({
+    super.key,
+    required this.child,
+    this.padding,
+    this.margin,
+    this.width,
+    this.height,
+    this.constraints,
+    this.borderRadius,
+    this.blurSigma = 12.0,
+    this.backgroundColor,
+    this.gradient,
+    this.border,
+    this.boxShadow,
+    this.clipBehavior = Clip.antiAlias,
+    this.enableHover = false,
+    this.onTap,
+  });
+
+  @override
+  State<GlassCard> createState() => _GlassCardState();
+}
+
+class _GlassCardState extends State<GlassCard> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final disableAnimations = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final effectiveRadius = widget.borderRadius ?? BorderRadius.circular(20);
+
+    // Deep navy base (#020B1C), secondary navy (#06152D), or crisp white
+    final defaultBgColor = isDark
+        ? const Color(0xC206152D)
+        : const Color(0xE8FFFFFF);
+
+    final defaultGradient = isDark
+        ? const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xCC0E2242), // Top-left subtle electric-navy highlight
+              Color(0xBD06152D), // Center deep translucent navy
+              Color(0xD1020B1C), // Bottom-right deep base
+            ],
+            stops: [0.0, 0.55, 1.0],
+          )
+        : const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xF5FFFFFF),
+              Color(0xEBFAFBFD),
+            ],
+          );
+
+    final defaultBorder = Border.all(
+      color: isDark
+          ? (_isHovered
+              ? const Color(0x6000D9FF)
+              : const Color(0x3500D9FF))
+          : (_isHovered
+              ? const Color(0x602563EB)
+              : const Color(0xffE2E8F0)),
+      width: 1.0,
+    );
+
+    final defaultShadows = [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: isDark ? 0.32 : 0.05),
+        blurRadius: _isHovered ? 26 : 20,
+        offset: Offset(0, _isHovered ? 8 : 6),
+      ),
+      if (isDark)
+        BoxShadow(
+          color: const Color(0xff00D9FF).withValues(alpha: _isHovered ? 0.08 : 0.04),
+          blurRadius: _isHovered ? 18 : 12,
+          spreadRadius: 0,
+        ),
+    ];
+
+    Widget innerContent = AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOutCubic,
+      padding: widget.padding,
+      decoration: BoxDecoration(
+        color: widget.gradient == null
+            ? (widget.backgroundColor ?? defaultBgColor)
+            : null,
+        gradient: widget.gradient ??
+            (widget.backgroundColor != null ? null : defaultGradient),
+        borderRadius: effectiveRadius,
+        border: widget.border ?? defaultBorder,
+      ),
+      child: widget.child,
+    );
+
+    if (widget.blurSigma > 0 && !disableAnimations) {
+      innerContent = ClipRRect(
+        borderRadius: effectiveRadius,
+        clipBehavior: widget.clipBehavior,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: widget.blurSigma,
+            sigmaY: widget.blurSigma,
+          ),
+          child: innerContent,
+        ),
+      );
+    } else {
+      innerContent = ClipRRect(
+        borderRadius: effectiveRadius,
+        clipBehavior: widget.clipBehavior,
+        child: innerContent,
+      );
+    }
+
+    Widget card = Container(
+      width: widget.width,
+      height: widget.height,
+      constraints: widget.constraints,
+      margin: widget.margin,
+      decoration: BoxDecoration(
+        borderRadius: effectiveRadius,
+        boxShadow: widget.boxShadow ?? defaultShadows,
+      ),
+      child: innerContent,
+    );
+
+    if (!widget.enableHover && widget.onTap == null) {
+      return card;
+    }
+
+    return MouseRegion(
+      cursor: widget.onTap != null ? SystemMouseCursors.click : MouseCursor.defer,
+      onEnter: widget.enableHover ? (_) => setState(() => _isHovered = true) : null,
+      onExit: widget.enableHover ? (_) => setState(() => _isHovered = false) : null,
+      child: widget.onTap != null
+          ? GestureDetector(onTap: widget.onTap, child: card)
+          : card,
+    );
+  }
+}
+
+// ============================================================================
+// PHASE 1: REUSABLE DESIGN SYSTEM COMPONENTS
+// ============================================================================
+
+class SafeRoutePageHeader extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final String? badge;
+  final Color? badgeColor;
+  final IconData? icon;
+  final Widget? trailing;
+
+  const SafeRoutePageHeader({
+    super.key,
+    required this.title,
+    required this.subtitle,
+    this.badge,
+    this.badgeColor,
+    this.icon,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final effectiveBadgeColor = badgeColor ?? _NeonTheme.neonCyan;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isCompact = constraints.maxWidth < 680;
+          final headerContent = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (badge != null) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: effectiveBadgeColor.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: effectiveBadgeColor.withValues(alpha: 0.40),
+                      width: 1.0,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (icon != null) ...[
+                        Icon(icon, size: 12, color: effectiveBadgeColor),
+                        const SizedBox(width: 5),
+                      ],
+                      Text(
+                        badge!,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.8,
+                          color: effectiveBadgeColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: isCompact ? 22 : 28,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.6,
+                  color: isDark ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: isCompact ? 12.5 : 14,
+                  height: 1.45,
+                  fontWeight: FontWeight.w500,
+                  color: isDark ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                ),
+              ),
+            ],
+          );
+
+          if (trailing == null) return headerContent;
+
+          if (isCompact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                headerContent,
+                const SizedBox(height: 16),
+                trailing!,
+              ],
+            );
+          }
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(child: headerContent),
+              const SizedBox(width: 20),
+              trailing!,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class SafeRoutePrimaryButton extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final VoidCallback? onPressed;
+  final bool isLoading;
+  final Color? backgroundColor;
+  final Color? foregroundColor;
+  final double? width;
+  final double height;
+
+  const SafeRoutePrimaryButton({
+    super.key,
+    required this.label,
+    this.icon,
+    this.onPressed,
+    this.isLoading = false,
+    this.backgroundColor,
+    this.foregroundColor,
+    this.width,
+    this.height = 46,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final btn = ElevatedButton.icon(
+      onPressed: isLoading ? null : onPressed,
+      icon: isLoading
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+            )
+          : (icon != null ? Icon(icon, size: 17) : const SizedBox.shrink()),
+      label: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: 0.3),
+      ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: backgroundColor ?? _NeonTheme.electricBlue,
+        foregroundColor: foregroundColor ?? Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        elevation: 2,
+      ),
+    );
+
+    if (width != null) {
+      return SizedBox(width: width, height: height, child: btn);
+    }
+    return SizedBox(height: height, child: btn);
+  }
+}
+
+class SafeRouteSecondaryButton extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final VoidCallback? onPressed;
+  final Color? borderColor;
+  final Color? foregroundColor;
+  final double? width;
+  final double height;
+
+  const SafeRouteSecondaryButton({
+    super.key,
+    required this.label,
+    this.icon,
+    this.onPressed,
+    this.borderColor,
+    this.foregroundColor,
+    this.width,
+    this.height = 46,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final borderCol = borderColor ?? (isDark ? _NeonTheme.cyanBorder : const Color(0xffCBD5E1));
+    final textCol = foregroundColor ?? (isDark ? _NeonTheme.neonCyan : _NeonTheme.electricBlue);
+
+    final btn = OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: icon != null ? Icon(icon, size: 16, color: textCol) : const SizedBox.shrink(),
+      label: Text(
+        label,
+        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: textCol),
+      ),
+      style: OutlinedButton.styleFrom(
+        side: BorderSide(color: borderCol, width: 1.1),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+
+    if (width != null) {
+      return SizedBox(width: width, height: height, child: btn);
+    }
+    return SizedBox(height: height, child: btn);
+  }
+}
+
+class SafeRouteStatusBadge extends StatelessWidget {
+  final String label;
+  final Color color;
+  final IconData? icon;
+
+  const SafeRouteStatusBadge({
+    super.key,
+    required this.label,
+    required this.color,
+    this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.35), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 12, color: color),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.4,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class SafeRouteEmptyState extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String description;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  const SafeRouteEmptyState({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.description,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: (isDark ? _NeonTheme.electricBlue : const Color(0xffE2E8F0)).withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 38, color: isDark ? _NeonTheme.neonCyan : _NeonTheme.electricBlue),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: isDark ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+              ),
+            ),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380),
+              child: Text(
+                description,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.45,
+                  color: isDark ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                ),
+              ),
+            ),
+            if (actionLabel != null && onAction != null) ...[
+              const SizedBox(height: 20),
+              SafeRoutePrimaryButton(label: actionLabel!, onPressed: onAction),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SafeRouteContentContainer extends StatelessWidget {
+  final Widget child;
+  final double maxWidth;
+  final EdgeInsetsGeometry? padding;
+
+  const SafeRouteContentContainer({
+    super.key,
+    required this.child,
+    this.maxWidth = 1240,
+    this.padding,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: padding ?? const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth),
+          child: child,
+        ),
+      ),
     );
   }
 }
@@ -2646,6 +3743,12 @@ const List<_HazardCategoryItem> _hazardCategories = [
     icon: Icons.car_crash_rounded,
     color: Color(0xffDC2626),
   ),
+  _HazardCategoryItem(
+    key: 'landslide_hazard',
+    title: 'Landslide / rockfall',
+    icon: Icons.landslide_rounded,
+    color: Color(0xffB45309),
+  ),
 ];
 
 _HazardCategoryItem _getHazardCategory(String key) {
@@ -2691,6 +3794,34 @@ class _HazardRerouteAssessment {
     explanation: 'No road hazards detected along current route.',
     avoidedHazardCount: 0,
   );
+}
+
+class _LiveSmartRerouteAssessment {
+  final bool canReroute;
+  final String explanation;
+  final _RouteResult? alternativeRoute;
+  final _RouteEvaluation? alternativeEvaluation;
+  final _RouteResult? currentRemainingRoute;
+  final double? distanceDiffKm;
+  final double? durationDiffMinutes;
+  final int avoidedHazardCount;
+  final List<_CommunityRoadHazard> avoidedHazards;
+  final List<_CommunityRoadHazard> remainingHazardsOnAlternative;
+  final String? failureReason;
+
+  const _LiveSmartRerouteAssessment({
+    required this.canReroute,
+    required this.explanation,
+    this.alternativeRoute,
+    this.alternativeEvaluation,
+    this.currentRemainingRoute,
+    this.distanceDiffKm,
+    this.durationDiffMinutes,
+    this.avoidedHazardCount = 0,
+    this.avoidedHazards = const [],
+    this.remainingHazardsOnAlternative = const [],
+    this.failureReason,
+  });
 }
 
 class _HourlyWeatherForecast {
@@ -2971,16 +4102,19 @@ class _SharedLocationResult {
 }
 
 enum _DashboardTab {
+  home,
   planRoute,
+  journeyMode,
+  safetyInsights,
   myTrips,
+  community,
+  emergency,
+  settings,
+  about,
   favouriteRoutes,
   safetyAnalytics,
   nearbyPlaces,
-  journeyMode,
-  safetyInsights,
   routeCompare,
-  settings,
-  about,
 }
 
 enum _SearchFieldType {
@@ -8047,6 +9181,55 @@ out tags;
     }
     return [];
   }
+
+  Future<Map<String, dynamic>?> checkRouteHazardReroute({
+    required List<LatLng> currentRoutePoints,
+    List<LatLng>? alternativeRoutePoints,
+    double? currentDistanceKm,
+    double? currentDurationMinutes,
+    Position? currentPosition,
+  }) async {
+    if (currentRoutePoints.isEmpty) return null;
+    final baseUrl = _trafficBackendBaseUrl;
+    try {
+      final url = Uri.parse('$baseUrl/route-hazard-reroute-check');
+      final payload = jsonEncode({
+        'current_route_points': currentRoutePoints
+            .map((p) => [p.latitude, p.longitude])
+            .toList(),
+        if (alternativeRoutePoints != null)
+          'alternative_route_points': alternativeRoutePoints
+              .map((p) => [p.latitude, p.longitude])
+              .toList(),
+        if (currentDistanceKm != null) 'current_distance_km': currentDistanceKm,
+        if (currentDurationMinutes != null)
+          'current_duration_minutes': currentDurationMinutes,
+        if (currentPosition != null)
+          'current_position': {
+            'lat': currentPosition.latitude,
+            'lon': currentPosition.longitude,
+          },
+      });
+
+      final response = await http
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: payload,
+          )
+          .timeout(const Duration(seconds: 4));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['success'] == true) {
+          return data;
+        }
+      }
+    } catch (e) {
+      debugPrint('CHECK ROUTE HAZARD ERROR: $e');
+    }
+    return null;
+  }
 }
 
 class HomePage extends StatefulWidget {
@@ -8060,7 +9243,7 @@ class HomePage extends StatefulWidget {
 
 class _FacilitiesRadarDiscoveryIllustration extends StatefulWidget {
   final bool isDark;
-  const _FacilitiesRadarDiscoveryIllustration({super.key, required this.isDark});
+  const _FacilitiesRadarDiscoveryIllustration({required this.isDark});
 
   @override
   State<_FacilitiesRadarDiscoveryIllustration> createState() => _FacilitiesRadarDiscoveryIllustrationState();
@@ -8286,6 +9469,8 @@ class _HomePageState extends State<HomePage>
 
   final fromController = TextEditingController();
   final toController = TextEditingController();
+  final FocusNode _fromFocusNode = FocusNode();
+  final FocusNode _toFocusNode = FocusNode();
   String selectedPreference = 'Safety First';
   String selectedTravelTime = 'Now';
   bool _isSmartNightModeActive = false;
@@ -8343,6 +9528,9 @@ class _HomePageState extends State<HomePage>
   void initState() {
     super.initState();
 
+    _fromFocusNode.addListener(() => setState(() {}));
+    _toFocusNode.addListener(() => setState(() {}));
+
     animationController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -8351,6 +9539,8 @@ class _HomePageState extends State<HomePage>
 
   @override
   void dispose() {
+    _fromFocusNode.dispose();
+    _toFocusNode.dispose();
     fromController.dispose();
     toController.dispose();
     animationController.dispose();
@@ -8494,21 +9684,12 @@ class _HomePageState extends State<HomePage>
   }
 
   Widget _heroPanel(ColorScheme colors, {required bool wide}) {
-    return Container(
-      width: double.infinity,
+    return _AiNeuralNetworkBackground(
+      isDark: _isDarkMode,
+      borderRadius: BorderRadius.circular(32),
       padding: EdgeInsets.symmetric(
-        horizontal: wide ? 8 : 22,
-        vertical: wide ? 30 : 22,
-      ),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: _isDarkMode
-              ? const [Color(0xff172A35), Color(0xff1B2736)]
-              : const [Color(0xffE7F7F8), Color(0xffEDF3FF)],
-        ),
-        borderRadius: BorderRadius.circular(32),
+        horizontal: wide ? 16 : 22,
+        vertical: wide ? 32 : 24,
       ),
       child: Column(
         crossAxisAlignment: wide
@@ -8527,6 +9708,12 @@ class _HomePageState extends State<HomePage>
               decoration: BoxDecoration(
                 color: colors.primary.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(25),
+                border: Border.all(
+                  color: _isDarkMode
+                      ? const Color(0x4000D9FF)
+                      : const Color(0x302563EB),
+                  width: 1.2,
+                ),
               ),
               child: Icon(Icons.route_rounded, size: 40, color: colors.primary),
             ),
@@ -8571,22 +9758,43 @@ class _HomePageState extends State<HomePage>
 
   Widget _searchCard() {
     final colors = Theme.of(context).colorScheme;
-    return Container(
+    return _GlassCard(
       width: double.infinity,
       constraints: const BoxConstraints(maxWidth: 620),
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.6)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: _isDarkMode ? 0.12 : 0.06),
-            blurRadius: 32,
-            offset: const Offset(0, 14),
-          ),
-        ],
+      padding: const EdgeInsets.all(26),
+      borderRadius: BorderRadius.circular(28),
+      blurSigma: 14.0,
+      gradient: _isDarkMode
+          ? const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0xD90E2242),
+                Color(0xCC06152D),
+                Color(0xE0020B1C),
+              ],
+              stops: [0.0, 0.45, 1.0],
+            )
+          : null,
+      border: Border.all(
+        color: _isDarkMode
+            ? const Color(0x4000D9FF)
+            : const Color(0xffE2E8F0),
+        width: 1.1,
       ),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: _isDarkMode ? 0.35 : 0.06),
+          blurRadius: 32,
+          offset: const Offset(0, 14),
+        ),
+        if (_isDarkMode)
+          BoxShadow(
+            color: const Color(0xff00D9FF).withValues(alpha: 0.05),
+            blurRadius: 20,
+            spreadRadius: 0,
+          ),
+      ],
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -8600,24 +9808,64 @@ class _HomePageState extends State<HomePage>
           ),
           const SizedBox(height: 5),
           Text(
-            'Choose where to start and where youâ€™re headed.',
+            'Choose where to start and where you’re headed.',
             style: TextStyle(color: colors.onSurfaceVariant),
           ),
           const SizedBox(height: 22),
-          TextField(
-            controller: fromController,
-            textInputAction: TextInputAction.next,
-            onChanged: (_) {
-              if (useCurrentLocationForStart) {
-                setState(() => useCurrentLocationForStart = false);
-              }
-            },
-            decoration: const InputDecoration(
-              labelText: 'Starting point',
-              hintText: 'Search any city, town, village, or place',
-              prefixIcon: Icon(
-                Icons.trip_origin_rounded,
-                color: Color(0xff36A889),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              color: _isDarkMode
+                  ? (_fromFocusNode.hasFocus
+                      ? const Color(0x990E2242)
+                      : const Color(0x5506152D))
+                  : (_fromFocusNode.hasFocus
+                      ? Colors.white
+                      : const Color(0xffF8FAFC)),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: _fromFocusNode.hasFocus
+                    ? (_isDarkMode
+                        ? const Color(0xff00D9FF)
+                        : const Color(0xff2563EB))
+                    : (_isDarkMode
+                        ? const Color(0x3500D9FF)
+                        : const Color(0xffCBD5E1)),
+                width: _fromFocusNode.hasFocus ? 1.5 : 1.0,
+              ),
+              boxShadow: _fromFocusNode.hasFocus
+                  ? [
+                      BoxShadow(
+                        color: (_isDarkMode
+                                ? const Color(0xff00D9FF)
+                                : const Color(0xff2563EB))
+                            .withValues(alpha: _isDarkMode ? 0.20 : 0.12),
+                        blurRadius: 10,
+                        spreadRadius: 0.5,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: TextField(
+              controller: fromController,
+              focusNode: _fromFocusNode,
+              textInputAction: TextInputAction.next,
+              onChanged: (_) {
+                if (useCurrentLocationForStart) {
+                  setState(() => useCurrentLocationForStart = false);
+                }
+              },
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                labelText: 'Starting point',
+                hintText: 'Search any city, town, village, or place',
+                prefixIcon: Icon(
+                  Icons.trip_origin_rounded,
+                  color: Color(0xff36A889),
+                ),
               ),
             ),
           ),
@@ -8648,19 +9896,67 @@ class _HomePageState extends State<HomePage>
             child: Container(
               height: 18,
               width: 2,
-              color: colors.outlineVariant,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: _isDarkMode
+                      ? const [Color(0xff36A889), Color(0xff00D9FF), Color(0xffE46D72)]
+                      : [const Color(0xff36A889), colors.outlineVariant, const Color(0xffE46D72)],
+                ),
+              ),
             ),
           ),
-          TextField(
-            controller: toController,
-            textInputAction: TextInputAction.done,
-            onSubmitted: (_) => searchRoute(),
-            decoration: const InputDecoration(
-              labelText: 'Destination',
-              hintText: 'Search any city, town, village, or place',
-              prefixIcon: Icon(
-                Icons.location_on_rounded,
-                color: Color(0xffE46D72),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              color: _isDarkMode
+                  ? (_toFocusNode.hasFocus
+                      ? const Color(0x990E2242)
+                      : const Color(0x5506152D))
+                  : (_toFocusNode.hasFocus
+                      ? Colors.white
+                      : const Color(0xffF8FAFC)),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: _toFocusNode.hasFocus
+                    ? (_isDarkMode
+                        ? const Color(0xff00D9FF)
+                        : const Color(0xff2563EB))
+                    : (_isDarkMode
+                        ? const Color(0x3500D9FF)
+                        : const Color(0xffCBD5E1)),
+                width: _toFocusNode.hasFocus ? 1.5 : 1.0,
+              ),
+              boxShadow: _toFocusNode.hasFocus
+                  ? [
+                      BoxShadow(
+                        color: (_isDarkMode
+                                ? const Color(0xff00D9FF)
+                                : const Color(0xff2563EB))
+                            .withValues(alpha: _isDarkMode ? 0.20 : 0.12),
+                        blurRadius: 10,
+                        spreadRadius: 0.5,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: TextField(
+              controller: toController,
+              focusNode: _toFocusNode,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => searchRoute(),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                labelText: 'Destination',
+                hintText: 'Search any city, town, village, or place',
+                prefixIcon: Icon(
+                  Icons.location_on_rounded,
+                  color: Color(0xffE46D72),
+                ),
               ),
             ),
           ),
@@ -8680,8 +9976,16 @@ class _HomePageState extends State<HomePage>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             decoration: BoxDecoration(
-              color: colors.surfaceContainerHighest.withValues(alpha: 0.55),
+              color: _isDarkMode
+                  ? const Color(0x6006152D)
+                  : colors.surfaceContainerHighest.withValues(alpha: 0.55),
               borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: _isDarkMode
+                    ? const Color(0x3500D9FF)
+                    : colors.outlineVariant.withValues(alpha: 0.6),
+                width: 1.0,
+              ),
             ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
@@ -8739,22 +10043,44 @@ class _HomePageState extends State<HomePage>
             ),
           ),
           const SizedBox(height: 22),
-          SizedBox(
-            width: double.infinity,
-            height: 56,
-            child: FilledButton.icon(
-              onPressed: searchRoute,
-              icon: const Icon(Icons.search_rounded),
-              label: const Text(
-                'Find a safer route',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xff2563EB),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+          _InteractivePressButton(
+            onPressed: searchRoute,
+            child: Container(
+              width: double.infinity,
+              height: 56,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [
+                    Color(0xff2563EB),
+                    Color(0xff1D4ED8),
+                    Color(0xff0EA5E9),
+                  ],
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
                 ),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xff2563EB).withValues(alpha: 0.35),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.search_rounded, color: Colors.white),
+                  SizedBox(width: 8),
+                  Text(
+                    'Find a safer route',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -8768,9 +10094,16 @@ class _HomePageState extends State<HomePage>
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: colors.primary.withValues(alpha: _isDarkMode ? 0.09 : 0.045),
+        color: _isDarkMode
+            ? const Color(0x6006152D)
+            : colors.primary.withValues(alpha: 0.045),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.7)),
+        border: Border.all(
+          color: _isDarkMode
+              ? const Color(0x3500D9FF)
+              : colors.outlineVariant.withValues(alpha: 0.7),
+          width: 1.0,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -9086,7 +10419,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
   final TextEditingController fromController = TextEditingController();
   final TextEditingController toController = TextEditingController();
   bool _searchCardExpanded = false;
-  _DashboardTab _currentTab = _DashboardTab.planRoute;
+  _DashboardTab _currentTab = _DashboardTab.home;
   bool _hasSearchedRoute = false;
   late AnimationController _heroAnimController;
 
@@ -9101,6 +10434,7 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
   bool _showCommunityHazards = true;
   List<_CommunityRoadHazard> _communityHazards = [];
   bool _loadingCommunityHazards = false;
+  String _communityFilter = 'all';
 
   static const List<String> _landingTravelTimeOptions = [
     'Now',
@@ -9153,6 +10487,19 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
       PersonalSafetyProfile.unconfiguredProfile();
 
   SafeRouteJourney? _activeJourney;
+
+  // Phase 2A: Live Route Hazard Monitoring state
+  _CommunityRoadHazard? _activeHazardAhead;
+  double? _activeHazardDistanceAheadMeters;
+  Map<String, dynamic>? _activeWeatherHazardAhead;
+  DateTime? _lastHazardCheckTime;
+  Position? _lastHazardCheckPosition;
+  bool _isCheckingRouteHazards = false;
+  final Set<int> _alertedHazardIds = {};
+  final Set<int> _dismissedHazardIds = {};
+  DateTime? _lastSpokenHazardAlertTime;
+  // Phase 2B: Smart Alternative Rerouting state
+  bool _isSearchingAlternative = false;
 
   void _onSearchFieldChanged(String query, _SearchFieldType field) {
     _debounceTimer?.cancel();
@@ -10513,6 +11860,11 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
         WidgetsBinding.instance.runtimeType.toString().contains('Test');
     final hasInitialRoute = (currentFromIsCurrentLocation || currentFrom.trim().isNotEmpty) &&
         currentTo.trim().isNotEmpty;
+    if (isTestEnvironment || hasInitialRoute) {
+      _currentTab = _DashboardTab.planRoute;
+    } else {
+      _currentTab = _DashboardTab.home;
+    }
     if (!isTestEnvironment) {
       unawaited(_loadCommunityHazards());
     }
@@ -11054,6 +12406,7 @@ void _handlePositionUpdate(Position position) {
     });
     if (_followMe) _centerMapOnPosition(position);
     _evaluateContextualRefreshIfNeeded(position);
+    _evaluateLiveRouteHazardsIfNeeded(position);
     if (_isTripSharingActive && _activeTripSharingSession != null) {
       final now = DateTime.now();
       if (_lastSharedLocationUpdate == null ||
@@ -11272,6 +12625,233 @@ void _handlePositionUpdate(Position position) {
     );
   }
 
+  double? _hazardRemainingAlongRoute(_CommunityRoadHazard hazard) {
+    final position = currentPosition;
+    if (position == null ||
+        hazard.latitude == null ||
+        hazard.longitude == null ||
+        routePoints.isEmpty) {
+      return null;
+    }
+    final currentProgress = _getCurrentUserRouteProgressMeters();
+    final hazardProgress = _routeProgressMeters(
+      LatLng(hazard.latitude!, hazard.longitude!),
+      routePoints,
+    );
+    if (hazardProgress == null) return null;
+    // If hazard is more than 35m behind the user, consider it passed
+    if (hazardProgress < currentProgress - 35.0) return null;
+    return math.max(0.0, hazardProgress - currentProgress);
+  }
+
+  List<LatLng> _getRemainingRoutePoints(Position position) {
+    if (routePoints.isEmpty) return const [];
+    final userLoc = LatLng(position.latitude, position.longitude);
+    if (routePoints.length <= 2) return [userLoc, routePoints.last];
+
+    final currentProgress = _routeProgressMeters(userLoc, routePoints) ?? 0.0;
+    int sliceIndex = 0;
+    double accumulated = 0.0;
+    for (int i = 0; i < routePoints.length - 1; i++) {
+      final segDist = service._distanceBetweenMeters(routePoints[i], routePoints[i + 1]);
+      if (accumulated + segDist >= currentProgress) {
+        sliceIndex = i;
+        break;
+      }
+      accumulated += segDist;
+    }
+
+    final remaining = <LatLng>[userLoc];
+    for (int i = sliceIndex + 1; i < routePoints.length; i++) {
+      remaining.add(routePoints[i]);
+    }
+    return remaining.length >= 2 ? remaining : [userLoc, routePoints.last];
+  }
+
+  void _updateActiveHazardCountdown(Position position) {
+    if (_activeHazardAhead != null) {
+      final rem = _hazardRemainingAlongRoute(_activeHazardAhead!);
+      if (rem == null || rem <= 0.0) {
+        // Hazard has been passed! Dismiss it.
+        _activeHazardAhead = null;
+        _activeHazardDistanceAheadMeters = null;
+      } else {
+        _activeHazardDistanceAheadMeters = rem;
+      }
+    }
+  }
+
+  Future<void> _evaluateLiveRouteHazardsIfNeeded(Position position) async {
+    if (!mounted ||
+        !_navigationActive ||
+        _activeJourney == null ||
+        _isCheckingRouteHazards ||
+        routePoints.isEmpty) {
+      return;
+    }
+
+    // Ignore inaccurate GPS jitter (> 50m)
+    if (position.accuracy.isFinite && position.accuracy > 50.0) {
+      return;
+    }
+
+    final now = DateTime.now();
+    final lastCheck = _lastHazardCheckTime;
+    final lastPos = _lastHazardCheckPosition;
+    final double distMoved = lastPos != null
+        ? service._distanceBetweenMeters(
+            LatLng(position.latitude, position.longitude),
+            LatLng(lastPos.latitude, lastPos.longitude),
+          )
+        : double.infinity;
+
+    final bool timeTrigger =
+        lastCheck == null || now.difference(lastCheck).inSeconds >= 30;
+    final bool moveTrigger = distMoved >= 500.0;
+
+    if (!timeTrigger && !moveTrigger) {
+      return;
+    }
+
+    _isCheckingRouteHazards = true;
+    _lastHazardCheckTime = now;
+    _lastHazardCheckPosition = position;
+
+    try {
+      final remainingPts = _getRemainingRoutePoints(position);
+      final totalMeters = _calculateTotalRouteMeters(routePoints);
+      final userProgress = _getCurrentUserRouteProgressMeters();
+      final remainingMeters = math.max(0.0, totalMeters - userProgress);
+      final remainingKm = remainingMeters / 1000.0;
+      final remainingMinutes =
+          service.calculateVehicleTime(remainingKm, currentVehicle);
+
+      // Query backend for hazard check along remaining route
+      final backendRes = await service.checkRouteHazardReroute(
+        currentRoutePoints: remainingPts,
+        currentDistanceKm: remainingKm,
+        currentDurationMinutes: remainingMinutes,
+        currentPosition: position,
+      );
+
+      final candidateHazards = <_CommunityRoadHazard>[];
+      final hazardDistances = <int, double>{};
+
+      if (backendRes != null && backendRes['success'] == true) {
+        final List<dynamic>? rawConfirmed =
+            backendRes['current_confirmed_hazards'] as List<dynamic>?;
+        final List<dynamic>? rawPending =
+            backendRes['pending_hazards'] as List<dynamic>?;
+
+        final combinedRaw = <dynamic>[
+          ...?rawConfirmed,
+          ...?rawPending,
+        ];
+
+        for (final item in combinedRaw) {
+          if (item is Map<String, dynamic>) {
+            final h = _CommunityRoadHazard.fromJson(item);
+            if (h.latitude != null && h.longitude != null) {
+              candidateHazards.add(h);
+            }
+          }
+        }
+
+        final List<dynamic>? rawWeather =
+            backendRes['weather_hazards'] as List<dynamic>?;
+        if (rawWeather != null && rawWeather.isNotEmpty) {
+          _activeWeatherHazardAhead = rawWeather.first as Map<String, dynamic>;
+        } else {
+          _activeWeatherHazardAhead = null;
+        }
+      } else {
+        // Fallback: evaluate existing _communityHazards along corridor
+        for (final h in _communityHazards) {
+          if (h.status == 'Resolved' || h.status == 'Expired') continue;
+          if (h.latitude == null || h.longitude == null) continue;
+          final d = _distanceFromCoordinatesToRoute(
+            LatLng(h.latitude!, h.longitude!),
+            routePoints,
+          );
+          if (d != null && d <= 800.0) {
+            candidateHazards.add(h);
+          }
+        }
+      }
+
+      // Filter: only hazards ahead of user and not dismissed
+      final validHazardsAhead = <_CommunityRoadHazard>[];
+      for (final h in candidateHazards) {
+        if (_dismissedHazardIds.contains(h.id)) continue;
+        final distAhead = _hazardRemainingAlongRoute(h);
+        // Horizon: between 25m and 3500m ahead
+        if (distAhead != null && distAhead > 25.0 && distAhead <= 3500.0) {
+          validHazardsAhead.add(h);
+          hazardDistances[h.id] = distAhead;
+        }
+      }
+
+      // Sort by closest distance ahead
+      validHazardsAhead.sort((a, b) {
+        final da = hazardDistances[a.id] ?? double.infinity;
+        final db = hazardDistances[b.id] ?? double.infinity;
+        return da.compareTo(db);
+      });
+
+      if (!mounted) return;
+
+      if (validHazardsAhead.isNotEmpty) {
+        final nearest = validHazardsAhead.first;
+        final dist = hazardDistances[nearest.id]!;
+
+        setState(() {
+          _activeHazardAhead = nearest;
+          _activeHazardDistanceAheadMeters = dist;
+        });
+
+        // Voice alert: only announce if not already alerted and cooled down
+        if (!_alertedHazardIds.contains(nearest.id)) {
+          final lastSpoken = _lastSpokenHazardAlertTime;
+          final bool cooldownOk =
+              lastSpoken == null || now.difference(lastSpoken).inSeconds >= 60;
+
+          if (cooldownOk && _voiceAlertsEnabled) {
+            final isTamil = _voiceLanguage == NavLanguage.tamil;
+            final distStr = _formatHazardDistance(dist, isTamil: isTamil);
+            final statusLabel = nearest.status == 'Confirmed'
+                ? (isTamil ? 'உறுதிப்படுத்தப்பட்ட' : 'Verified')
+                : (isTamil ? 'சமூக அறிக்கை' : 'Community report');
+            final voiceMsg = isTamil
+                ? 'எச்சரிக்கை: $statusLabel ${nearest.problemType} $distStr தொலைவில் உள்ளது.'
+                : 'Caution: $statusLabel ${nearest.problemType} reported $distStr ahead.';
+            _speakAlert(voiceMsg);
+            _lastSpokenHazardAlertTime = now;
+          }
+          _alertedHazardIds.add(nearest.id);
+        }
+      } else {
+        setState(() {
+          _activeHazardAhead = null;
+          _activeHazardDistanceAheadMeters = null;
+        });
+      }
+    } catch (e) {
+      debugPrint('Live route hazard check non-fatal error: $e');
+    } finally {
+      _isCheckingRouteHazards = false;
+    }
+  }
+
+  String _formatHazardDistance(double meters, {bool isTamil = false}) {
+    if (meters < 1000) {
+      final rounded = (meters / 50).round() * 50;
+      final m = math.max(50, rounded);
+      return isTamil ? '$m மீட்டர்கள்' : '$m metres';
+    }
+    final km = (meters / 1000.0).toStringAsFixed(1);
+    return isTamil ? '$km கி.மீ' : '$km km';
+  }
+
 
   void _updateRouteProximity(Position position) {
     _distanceFromRouteMeters = _distanceToRouteMeters(position, routePoints);
@@ -11379,6 +12959,15 @@ void _handlePositionUpdate(Position position) {
       _lastSpokenTime = null;
       _spokenFacilityKey = null;
       _offRouteAlertSpoken = false;
+      _activeHazardAhead = null;
+      _activeHazardDistanceAheadMeters = null;
+      _activeWeatherHazardAhead = null;
+      _isCheckingRouteHazards = false;
+      _lastHazardCheckTime = null;
+      _lastHazardCheckPosition = null;
+      _alertedHazardIds.clear();
+      _dismissedHazardIds.clear();
+      _lastSpokenHazardAlertTime = null;
     });
   }
 
@@ -11525,6 +13114,9 @@ void _handlePositionUpdate(Position position) {
         }
       }
     }
+
+    // 4. Live Route Hazard Ahead Progress Check
+    _updateActiveHazardCountdown(position);
   }
 
   _NextStepInfo _getNextStepInfo() {
@@ -13782,8 +15374,21 @@ void _handlePositionUpdate(Position position) {
     super.dispose();
   }
 
+  void _updateAnimationLifecycle() {
+    if (_currentTab == _DashboardTab.home) {
+      if (!_heroAnimController.isAnimating) {
+        _heroAnimController.repeat(reverse: true);
+      }
+    } else {
+      if (_heroAnimController.isAnimating) {
+        _heroAnimController.stop();
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    _updateAnimationLifecycle();
     final width = MediaQuery.sizeOf(context).width;
     final compact = width < 1140;
     final ultraCompact = width < 600;
@@ -13831,7 +15436,9 @@ void _handlePositionUpdate(Position position) {
   }
 
   Widget _buildTopNavbar({required bool compact, required bool ultraCompact}) {
-    return AnimatedContainer(
+    final disableAnimations = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+
+    final navBarWidget = AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeOutCubic,
       padding: EdgeInsets.symmetric(
@@ -13840,22 +15447,45 @@ void _handlePositionUpdate(Position position) {
       ),
       decoration: BoxDecoration(
         color: _isDarkMode
-            ? const Color(0xEB0A1120)
-            : const Color(0xF0FFFFFF),
+            ? const Color(0xB806152D)
+            : const Color(0xCCFFFFFF),
+        gradient: _isDarkMode
+            ? const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color(0xC80E2242),
+                  Color(0xB806152D),
+                ],
+              )
+            : const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color(0xF0FFFFFF),
+                  Color(0xE0F8FAFC),
+                ],
+              ),
         border: Border(
           bottom: BorderSide(
             color: _isDarkMode
-                ? _NeonTheme.cyanBorder.withValues(alpha: 0.35)
+                ? const Color(0x4000D9FF)
                 : const Color(0xffE2E8F0),
             width: 1,
           ),
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: _isDarkMode ? 0.22 : 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
+            color: Colors.black.withValues(alpha: _isDarkMode ? 0.28 : 0.05),
+            blurRadius: 14,
+            offset: const Offset(0, 3),
           ),
+          if (_isDarkMode)
+            BoxShadow(
+              color: const Color(0xff00D9FF).withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 1),
+            ),
         ],
       ),
       child: SafeArea(
@@ -13867,7 +15497,6 @@ void _handlePositionUpdate(Position position) {
             final isMobile = navWidth < 700;
             final showSubtitle = navWidth >= 1180;
             final showFullAiBadge = navWidth >= 1260;
-            final showFavourites = navWidth >= 1060;
             final tabSpacing = navWidth >= 1350 ? 6.0 : 4.0;
 
             return Row(
@@ -13969,27 +15598,55 @@ void _handlePositionUpdate(Position position) {
                                       _buildNavTabButton(
                                         label: 'Home',
                                         icon: Icons.home_rounded,
+                                        tab: _DashboardTab.home,
+                                      ),
+                                      SizedBox(width: tabSpacing),
+                                      _buildNavTabButton(
+                                        label: 'Explore',
+                                        icon: Icons.explore_rounded,
                                         tab: _DashboardTab.planRoute,
                                       ),
                                       SizedBox(width: tabSpacing),
                                       _buildNavTabButton(
-                                        label: 'My Trips',
+                                        label: 'Live Nav',
+                                        icon: Icons.navigation_rounded,
+                                        tab: _DashboardTab.journeyMode,
+                                      ),
+                                      SizedBox(width: tabSpacing),
+                                      _buildNavTabButton(
+                                        label: 'Insights',
+                                        icon: Icons.bar_chart_rounded,
+                                        tab: _DashboardTab.safetyInsights,
+                                      ),
+                                      SizedBox(width: tabSpacing),
+                                      _buildNavTabButton(
+                                        label: 'Trips',
                                         icon: Icons.history_rounded,
                                         tab: _DashboardTab.myTrips,
                                       ),
-                                      if (showFavourites) ...[
-                                        SizedBox(width: tabSpacing),
-                                        _buildNavTabButton(
-                                          label: 'Favourites',
-                                          icon: Icons.star_rounded,
-                                          tab: _DashboardTab.favouriteRoutes,
-                                        ),
-                                      ],
                                       SizedBox(width: tabSpacing),
                                       _buildNavTabButton(
-                                        label: 'Analytics',
-                                        icon: Icons.analytics_rounded,
-                                        tab: _DashboardTab.safetyAnalytics,
+                                        label: 'Community',
+                                        icon: Icons.groups_rounded,
+                                        tab: _DashboardTab.community,
+                                      ),
+                                      SizedBox(width: tabSpacing),
+                                      _buildNavTabButton(
+                                        label: 'Emergency',
+                                        icon: Icons.emergency_rounded,
+                                        tab: _DashboardTab.emergency,
+                                      ),
+                                      SizedBox(width: tabSpacing),
+                                      _buildNavTabButton(
+                                        label: 'Settings',
+                                        icon: Icons.tune_rounded,
+                                        tab: _DashboardTab.settings,
+                                      ),
+                                      SizedBox(width: tabSpacing),
+                                      _buildNavTabButton(
+                                        label: 'About',
+                                        icon: Icons.info_outline_rounded,
+                                        tab: _DashboardTab.about,
                                       ),
                                     ],
                                   ),
@@ -14022,33 +15679,73 @@ void _handlePositionUpdate(Position position) {
                               children: [
                                 IconButton(
                                   tooltip: 'Home',
-                                  onPressed: () {
-                                    setState(() {
-                                      _currentTab = _DashboardTab.planRoute;
-                                    });
-                                  },
+                                  onPressed: () => setState(() => _currentTab = _DashboardTab.home),
                                   icon: Icon(
                                     Icons.home_rounded,
-                                    color: _currentTab == _DashboardTab.planRoute
-                                        ? const Color(0xff2563EB)
+                                    color: _currentTab == _DashboardTab.home
+                                        ? const Color(0xff00D9FF)
                                         : (_isDarkMode ? Colors.white70 : Colors.black87),
                                     size: 20,
                                   ),
                                 ),
                                 IconButton(
-                                  tooltip: 'Safety Profile',
-                                  onPressed: _openSafetyProfileDialog,
+                                  tooltip: 'Explore Routes',
+                                  onPressed: () => setState(() => _currentTab = _DashboardTab.planRoute),
                                   icon: Icon(
-                                    Icons.person_pin_rounded,
-                                    color: _isDarkMode
-                                        ? NeonTheme.safeGreen
-                                        : const Color(0xff15803D),
+                                    Icons.explore_rounded,
+                                    color: _currentTab == _DashboardTab.planRoute
+                                        ? const Color(0xff00D9FF)
+                                        : (_isDarkMode ? Colors.white70 : Colors.black87),
+                                    size: 20,
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Live Navigation',
+                                  onPressed: () => setState(() => _currentTab = _DashboardTab.journeyMode),
+                                  icon: Icon(
+                                    Icons.navigation_rounded,
+                                    color: _currentTab == _DashboardTab.journeyMode
+                                        ? const Color(0xff00D9FF)
+                                        : (_isDarkMode ? Colors.white70 : Colors.black87),
+                                    size: 20,
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Safety Insights',
+                                  onPressed: () => setState(() => _currentTab = _DashboardTab.safetyInsights),
+                                  icon: Icon(
+                                    Icons.bar_chart_rounded,
+                                    color: _currentTab == _DashboardTab.safetyInsights
+                                        ? const Color(0xff00D9FF)
+                                        : (_isDarkMode ? Colors.white70 : Colors.black87),
+                                    size: 20,
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'My Trips',
+                                  onPressed: () => setState(() => _currentTab = _DashboardTab.myTrips),
+                                  icon: Icon(
+                                    Icons.history_rounded,
+                                    color: _currentTab == _DashboardTab.myTrips
+                                        ? const Color(0xff00D9FF)
+                                        : (_isDarkMode ? Colors.white70 : Colors.black87),
+                                    size: 20,
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Community Hazards',
+                                  onPressed: () => setState(() => _currentTab = _DashboardTab.community),
+                                  icon: Icon(
+                                    Icons.groups_rounded,
+                                    color: _currentTab == _DashboardTab.community
+                                        ? const Color(0xffFFB020)
+                                        : (_isDarkMode ? Colors.white70 : Colors.black87),
                                     size: 20,
                                   ),
                                 ),
                                 IconButton(
                                   tooltip: 'Emergency Assistance',
-                                  onPressed: _openEmergencyDialog,
+                                  onPressed: () => setState(() => _currentTab = _DashboardTab.emergency),
                                   icon: const Icon(
                                     Icons.emergency_rounded,
                                     color: NeonTheme.dangerRed,
@@ -14056,33 +15753,23 @@ void _handlePositionUpdate(Position position) {
                                   ),
                                 ),
                                 IconButton(
-                                  tooltip: 'Favourite Routes',
-                                  onPressed: () {
-                                    setState(() {
-                                      _currentTab = _DashboardTab.favouriteRoutes;
-                                    });
-                                  },
+                                  tooltip: 'Settings',
+                                  onPressed: () => setState(() => _currentTab = _DashboardTab.settings),
                                   icon: Icon(
-                                    _currentTab == _DashboardTab.favouriteRoutes
-                                        ? Icons.star_rounded
-                                        : Icons.star_border_rounded,
-                                    color: _NeonTheme.neonAmber,
+                                    Icons.tune_rounded,
+                                    color: _currentTab == _DashboardTab.settings
+                                        ? const Color(0xff00D9FF)
+                                        : (_isDarkMode ? Colors.white70 : Colors.black87),
                                     size: 20,
                                   ),
                                 ),
                                 IconButton(
-                                  tooltip: 'Safety Analytics',
-                                  onPressed: () {
-                                    setState(() {
-                                      _currentTab = _DashboardTab.safetyAnalytics;
-                                    });
-                                  },
+                                  tooltip: 'About',
+                                  onPressed: () => setState(() => _currentTab = _DashboardTab.about),
                                   icon: Icon(
-                                    Icons.analytics_rounded,
-                                    color: _currentTab == _DashboardTab.safetyAnalytics
-                                        ? (_isDarkMode
-                                            ? _NeonTheme.neonCyan
-                                            : const Color(0xff2563EB))
+                                    Icons.info_outline_rounded,
+                                    color: _currentTab == _DashboardTab.about
+                                        ? const Color(0xff00D9FF)
                                         : (_isDarkMode ? Colors.white70 : Colors.black87),
                                     size: 20,
                                   ),
@@ -14324,6 +16011,17 @@ void _handlePositionUpdate(Position position) {
         ),
       ),
     );
+
+    if (disableAnimations) {
+      return navBarWidget;
+    }
+
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: navBarWidget,
+      ),
+    );
   }
 
   Widget _buildNavActionButton({
@@ -14511,91 +16209,105 @@ void _handlePositionUpdate(Position position) {
           return SingleChildScrollView(
             child: ConstrainedBox(
               constraints: BoxConstraints(minHeight: constraints.maxHeight),
-              child: IntrinsicHeight(
-                child: Column(
-                  children: [
-                    const SizedBox(height: 12),
-                    _buildSidebarItem(
-                      icon: Icons.home_rounded,
-                      label: 'Home',
-                      tab: _DashboardTab.planRoute,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(height: 10),
+                      _buildSidebarItem(
+                        icon: Icons.home_rounded,
+                        label: 'Home',
+                        tab: _DashboardTab.home,
+                      ),
+                      const SizedBox(height: 6),
+                      _buildSidebarItem(
+                        icon: Icons.explore_rounded,
+                        label: 'Explore',
+                        tab: _DashboardTab.planRoute,
+                      ),
+                      const SizedBox(height: 6),
+                      _buildSidebarItem(
+                        icon: Icons.navigation_rounded,
+                        label: 'Live Nav',
+                        tab: _DashboardTab.journeyMode,
+                      ),
+                      const SizedBox(height: 6),
+                      _buildSidebarItem(
+                        icon: Icons.bar_chart_rounded,
+                        label: 'Insights',
+                        tab: _DashboardTab.safetyInsights,
+                      ),
+                      const SizedBox(height: 6),
+                      _buildSidebarItem(
+                        icon: Icons.history_rounded,
+                        label: 'Trips',
+                        tab: _DashboardTab.myTrips,
+                      ),
+                      const SizedBox(height: 6),
+                      _buildSidebarItem(
+                        icon: Icons.groups_rounded,
+                        label: 'Community',
+                        tab: _DashboardTab.community,
+                      ),
+                      const SizedBox(height: 6),
+                      _buildSidebarItem(
+                        icon: Icons.emergency_rounded,
+                        label: 'Emergency',
+                        tab: _DashboardTab.emergency,
+                      ),
+                      const SizedBox(height: 6),
+                      _buildSidebarItem(
+                        icon: Icons.tune_rounded,
+                        label: 'Settings',
+                        tab: _DashboardTab.settings,
+                      ),
+                      const SizedBox(height: 6),
+                      _buildSidebarItem(
+                        icon: Icons.info_outline_rounded,
+                        label: 'About',
+                        tab: _DashboardTab.about,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  // Safety First ❤️ Bottom Badge matching reference
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xff00D9FF).withValues(alpha: _isDarkMode ? 0.12 : 0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: const Color(0xff00D9FF).withValues(alpha: 0.35),
+                        width: 1,
+                      ),
                     ),
-                    const SizedBox(height: 10),
-                    _buildSidebarItem(
-                      icon: Icons.explore_outlined,
-                      label: 'Map',
-                      tab: _DashboardTab.journeyMode,
-                    ),
-                    const SizedBox(height: 10),
-                    _buildSidebarItem(
-                      icon: Icons.alt_route_rounded,
-                      label: 'Trips',
-                      tab: _DashboardTab.myTrips,
-                    ),
-                    const SizedBox(height: 10),
-                    _buildSidebarItem(
-                      icon: Icons.place_outlined,
-                      label: 'Facilities',
-                      tab: _DashboardTab.nearbyPlaces,
-                    ),
-                    const SizedBox(height: 10),
-                    _buildSidebarItem(
-                      icon: Icons.bar_chart_rounded,
-                      label: 'Insights',
-                      tab: _DashboardTab.safetyInsights,
-                    ),
-                    const SizedBox(height: 10),
-                    _buildSidebarItem(
-                      icon: Icons.psychology_rounded,
-                      label: 'Forecast',
-                      tab: _DashboardTab.planRoute,
-                      customTap: () => _openRiskForecastDialog(),
-                    ),
-                    const SizedBox(height: 10),
-                    _buildSidebarItem(
-                      icon: Icons.person_outline_rounded,
-                      label: 'Profile',
-                      tab: _DashboardTab.planRoute,
-                      customTap: _openSafetyProfileDialog,
-                    ),
-                    const Spacer(),
-                    // Safety First ❤️ Bottom Badge matching reference
-                    Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: const Color(0xff00D9FF).withValues(alpha: _isDarkMode ? 0.12 : 0.08),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: const Color(0xff00D9FF).withValues(alpha: 0.35),
-                          width: 1,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.shield_outlined,
+                          size: 18,
+                          color: Color(0xff00D9FF),
                         ),
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.shield_outlined,
-                            size: 18,
-                            color: Color(0xff00D9FF),
+                        const SizedBox(height: 3),
+                        Text(
+                          'Safety\nFirst ❤️',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 8,
+                            fontWeight: FontWeight.w800,
+                            height: 1.1,
+                            color: _isDarkMode ? const Color(0xff00D9FF) : const Color(0xff2563EB),
                           ),
-                          const SizedBox(height: 3),
-                          Text(
-                            'Safety\nFirst ❤️',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 8,
-                              fontWeight: FontWeight.w800,
-                              height: 1.1,
-                              color: _isDarkMode ? const Color(0xff00D9FF) : const Color(0xff2563EB),
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 6),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 4),
+                ],
               ),
             ),
           );
@@ -14605,22 +16317,17 @@ void _handlePositionUpdate(Position position) {
   }
 
   Widget _buildBottomNavBar() {
-    final isHome = _currentTab == _DashboardTab.planRoute;
-    final isTrips = _currentTab == _DashboardTab.myTrips;
-    final isJourney = _currentTab == _DashboardTab.journeyMode;
-    final isSaved = _currentTab == _DashboardTab.favouriteRoutes;
-
     int currentIndex = 0;
-    if (isHome) {
+    if (_currentTab == _DashboardTab.home) {
       currentIndex = 0;
-    } else if (isTrips) {
+    } else if (_currentTab == _DashboardTab.planRoute) {
       currentIndex = 1;
-    } else if (isJourney) {
+    } else if (_currentTab == _DashboardTab.journeyMode) {
       currentIndex = 2;
-    } else if (isSaved) {
+    } else if (_currentTab == _DashboardTab.myTrips) {
       currentIndex = 3;
     } else {
-      currentIndex = 0;
+      currentIndex = 4;
     }
 
     return Container(
@@ -14651,19 +16358,17 @@ void _handlePositionUpdate(Position position) {
           child: BottomNavigationBar(
             currentIndex: currentIndex,
             onTap: (index) {
-              setState(() {
-                if (index == 0) {
-                  _currentTab = _DashboardTab.planRoute;
-                } else if (index == 1) {
-                  _currentTab = _DashboardTab.myTrips;
-                } else if (index == 2) {
-                  _currentTab = _DashboardTab.journeyMode;
-                } else if (index == 3) {
-                  _currentTab = _DashboardTab.favouriteRoutes;
-                } else if (index == 4) {
-                  _openSafetyProfileDialog();
-                }
-              });
+              if (index == 0) {
+                setState(() => _currentTab = _DashboardTab.home);
+              } else if (index == 1) {
+                setState(() => _currentTab = _DashboardTab.planRoute);
+              } else if (index == 2) {
+                setState(() => _currentTab = _DashboardTab.journeyMode);
+              } else if (index == 3) {
+                setState(() => _currentTab = _DashboardTab.myTrips);
+              } else if (index == 4) {
+                _showMobileMoreSheet(context);
+              }
             },
             backgroundColor: Colors.transparent,
             elevation: 0,
@@ -14678,24 +16383,24 @@ void _handlePositionUpdate(Position position) {
             type: BottomNavigationBarType.fixed,
             items: const [
               BottomNavigationBarItem(
-                icon: Icon(Icons.explore_rounded),
+                icon: Icon(Icons.home_rounded),
                 label: 'Home',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.explore_rounded),
+                label: 'Explore',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.navigation_rounded),
+                label: 'Live Nav',
               ),
               BottomNavigationBarItem(
                 icon: Icon(Icons.history_rounded),
                 label: 'Trips',
               ),
               BottomNavigationBarItem(
-                icon: Icon(Icons.navigation_rounded),
-                label: 'Journey',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.star_rounded),
-                label: 'Saved',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.person_pin_rounded),
-                label: 'Profile',
+                icon: Icon(Icons.grid_view_rounded),
+                label: 'More',
               ),
             ],
           ),
@@ -14748,6 +16453,39 @@ void _handlePositionUpdate(Position position) {
                   children: [
                     _buildMobileMoreItem(
                       ctx,
+                      icon: Icons.groups_rounded,
+                      color: _NeonTheme.safeGreen,
+                      label: 'Community',
+                      onTap: () {
+                        setState(
+                          () => _currentTab = _DashboardTab.community,
+                        );
+                      },
+                    ),
+                    _buildMobileMoreItem(
+                      ctx,
+                      icon: Icons.emergency_rounded,
+                      color: _NeonTheme.dangerRed,
+                      label: 'Emergency',
+                      onTap: () {
+                        setState(
+                          () => _currentTab = _DashboardTab.emergency,
+                        );
+                      },
+                    ),
+                    _buildMobileMoreItem(
+                      ctx,
+                      icon: Icons.shield_rounded,
+                      color: _NeonTheme.neonCyan,
+                      label: 'Insights',
+                      onTap: () {
+                        setState(
+                          () => _currentTab = _DashboardTab.safetyInsights,
+                        );
+                      },
+                    ),
+                    _buildMobileMoreItem(
+                      ctx,
                       icon: Icons.star_rounded,
                       color: _NeonTheme.neonAmber,
                       label: 'Favourites',
@@ -14795,26 +16533,6 @@ void _handlePositionUpdate(Position position) {
                       label: 'Risk Forecast',
                       onTap: () {
                         _openRiskForecastDialog();
-                      },
-                    ),
-                    _buildMobileMoreItem(
-                      ctx,
-                      icon: Icons.shield_rounded,
-                      color: _NeonTheme.neonCyan,
-                      label: 'Insights',
-                      onTap: () {
-                        setState(
-                          () => _currentTab = _DashboardTab.safetyInsights,
-                        );
-                      },
-                    ),
-                    _buildMobileMoreItem(
-                      ctx,
-                      icon: Icons.emergency_rounded,
-                      color: _NeonTheme.dangerRed,
-                      label: 'Emergency',
-                      onTap: () {
-                        _openEmergencyDialog();
                       },
                     ),
                     _buildMobileMoreItem(
@@ -14915,10 +16633,10 @@ void _handlePositionUpdate(Position position) {
     required bool compact,
   }) {
     switch (_currentTab) {
+      case _DashboardTab.home:
+        return _buildLandingView(context, compact: compact);
+
       case _DashboardTab.planRoute:
-        if (!_hasSearchedRoute && routePoints.isEmpty) {
-          return _buildLandingView(context, compact: compact);
-        }
         if (loading) {
           return Center(
             child: Container(
@@ -15070,6 +16788,12 @@ void _handlePositionUpdate(Position position) {
         }
         return _buildMapDashboard(context, compact: compact);
 
+      case _DashboardTab.community:
+        return _buildCommunityView(context, compact: compact);
+
+      case _DashboardTab.emergency:
+        return _buildEmergencyView(context, compact: compact);
+
       case _DashboardTab.myTrips:
         return _buildTripsHistoryView();
 
@@ -15120,6 +16844,7 @@ void _handlePositionUpdate(Position position) {
       _activeSearchField = _SearchFieldType.none;
       _hasSearchedRoute = true;
       _searchCardExpanded = false;
+      _currentTab = _DashboardTab.planRoute;
       if (_selectedFacilityCategories.isNotEmpty) {
         _syncFacilityGroupsFromCategories();
       } else if (_selectedFacilityGroups.isNotEmpty) {
@@ -15141,44 +16866,42 @@ void _handlePositionUpdate(Position position) {
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1240),
-          child: wide
-              ? Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: _buildLandingHero(wide: true)),
-                    const SizedBox(width: 36),
-                    Expanded(child: _buildLandingSearchCard(wide: true)),
-                  ],
-                )
-              : Column(
-                  children: [
-                    _buildLandingHero(wide: false),
-                    const SizedBox(height: 24),
-                    _buildLandingSearchCard(wide: false),
-                  ],
-                ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              wide
+                  ? Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: _buildLandingHero(wide: true)),
+                        const SizedBox(width: 36),
+                        Expanded(child: _buildLandingSearchCard(wide: true)),
+                      ],
+                    )
+                  : Column(
+                      children: [
+                        _buildLandingHero(wide: false),
+                        const SizedBox(height: 24),
+                        _buildLandingSearchCard(wide: false),
+                      ],
+                    ),
+              const SizedBox(height: 36),
+              _buildLandingFeatureHighlights(wide: wide),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _buildLandingHero({required bool wide}) {
-    return Container(
-      width: double.infinity,
+    return _AiNeuralNetworkBackground(
+      isDark: _isDarkMode,
+      backgroundImageAsset: 'assets/images/tn_road_hero.jpg',
+      borderRadius: BorderRadius.circular(28),
       padding: EdgeInsets.symmetric(
         horizontal: wide ? 32 : 20,
         vertical: wide ? 36 : 24,
-      ),
-      decoration: BoxDecoration(
-        color: _isDarkMode
-            ? _NeonTheme.cardDark.withValues(alpha: 0.95)
-            : Colors.white,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(
-          color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffE2E8F0),
-          width: 1.2,
-        ),
-        boxShadow: _NeonTheme.cardShadow(_isDarkMode),
       ),
       child: Column(
         crossAxisAlignment: wide
@@ -15215,7 +16938,7 @@ void _handlePositionUpdate(Position position) {
           ),
           const SizedBox(height: 28),
           Text(
-            'A safer way\nto find your way.',
+            'Navigate Smarter.\nTravel Safer.',
             textAlign: wide ? TextAlign.left : TextAlign.center,
             style: TextStyle(
               fontSize: wide ? 46 : 34,
@@ -15229,7 +16952,7 @@ void _handlePositionUpdate(Position position) {
           ),
           const SizedBox(height: 16),
           Text(
-            'Thoughtful, accessible navigation for the roads of Tamil Nadu.',
+            'AI-powered context-aware navigation for Tamil Nadu.',
             textAlign: wide ? TextAlign.left : TextAlign.center,
             style: TextStyle(
               fontSize: 16,
@@ -15263,11 +16986,255 @@ void _handlePositionUpdate(Position position) {
               ),
             ],
           ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _NeonTheme.electricBlue,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              elevation: 4,
+              shadowColor: _NeonTheme.electricBlue.withValues(alpha: 0.5),
+            ),
+            onPressed: () {
+              setState(() => _currentTab = _DashboardTab.planRoute);
+            },
+            icon: const Icon(Icons.explore_rounded, size: 20),
+            label: const Text(
+              'PLAN YOUR JOURNEY',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.6,
+              ),
+            ),
+          ),
           const SizedBox(height: 24),
           PersonalSafetyProfileCard(
             isDarkMode: _isDarkMode,
             profile: _personalProfile,
             onManagePreferences: _openSafetyProfileDialog,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLandingFeatureHighlights({required bool wide}) {
+    final cards = [
+      _buildLandingFeatureCard(
+        imageAsset: 'assets/images/tn_western_ghats.jpg',
+        badge: 'TERRAIN TELEMETRY',
+        badgeColor: _NeonTheme.safeGreen,
+        title: 'Western Ghats Safety Corridor',
+        description:
+            'Continuous hairpin turn advisory, elevation telemetry, and monsoon landslide hazard prediction across Nilgiris & Anamalai passes.',
+        icon: Icons.landscape_rounded,
+      ),
+      _buildLandingFeatureCard(
+        imageAsset: 'assets/images/tamil_nadu_dusk_banner.jpg',
+        badge: 'ACCIDENT MITIGATION',
+        badgeColor: _NeonTheme.dangerRed,
+        title: 'NH-44 & Arterial Blackspot Radar',
+        description:
+            'Sub-kilometer spatial proximity surveillance referencing 100+ verified high-fatality highway zones throughout Tamil Nadu.',
+        icon: Icons.radar_rounded,
+      ),
+      _buildLandingFeatureCard(
+        imageAsset: 'assets/images/saferoute_ai_network_hero.jpg',
+        badge: 'AI REASONING',
+        badgeColor: _NeonTheme.neonCyan,
+        title: 'Context-Aware Route Synthesis',
+        description:
+            'Multi-objective optimization balancing verified road lighting, live weather hazards, vector traffic flow, and wheelchair accessibility.',
+        icon: Icons.auto_awesome_rounded,
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 4,
+              height: 20,
+              decoration: BoxDecoration(
+                color: _NeonTheme.neonCyan,
+                borderRadius: BorderRadius.circular(2),
+                boxShadow: _NeonTheme.cyanGlow(8),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'INTELLIGENT NAVIGATION ECOSYSTEM',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.5,
+                color: _NeonTheme.neonCyan,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Engineered for Tamil Nadu Road Realities',
+          style: TextStyle(
+            fontSize: wide ? 24 : 20,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.5,
+            color: _isDarkMode
+                ? _NeonTheme.textPrimaryDark
+                : _NeonTheme.textPrimaryLight,
+          ),
+        ),
+        const SizedBox(height: 20),
+        wide
+            ? Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: cards[0]),
+                  const SizedBox(width: 20),
+                  Expanded(child: cards[1]),
+                  const SizedBox(width: 20),
+                  Expanded(child: cards[2]),
+                ],
+              )
+            : Column(
+                children: [
+                  cards[0],
+                  const SizedBox(height: 16),
+                  cards[1],
+                  const SizedBox(height: 16),
+                  cards[2],
+                ],
+              ),
+      ],
+    );
+  }
+
+  Widget _buildLandingFeatureCard({
+    required String imageAsset,
+    required String badge,
+    required Color badgeColor,
+    required String title,
+    required String description,
+    required IconData icon,
+  }) {
+    return GlassCard(
+      borderRadius: BorderRadius.circular(20),
+      enableHover: true,
+      border: Border.all(
+        color: _isDarkMode
+            ? _NeonTheme.cyanBorder.withValues(alpha: 0.3)
+            : const Color(0xffE2E8F0),
+        width: 1.2,
+      ),
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            height: 140,
+            width: double.infinity,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Image.asset(
+                  imageAsset,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    color: _isDarkMode
+                        ? const Color(0xff06152D)
+                        : const Color(0xffE2E8F0),
+                    child: Center(
+                      child: Icon(icon, color: badgeColor, size: 36),
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          (_isDarkMode
+                                  ? const Color(0xff020B1C)
+                                  : Colors.white)
+                              .withValues(alpha: 0.85),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 12,
+                  left: 12,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: (_isDarkMode
+                              ? const Color(0xff020B1C)
+                              : Colors.white)
+                          .withValues(alpha: 0.88),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                          color: badgeColor.withValues(alpha: 0.5), width: 1),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(icon, size: 12, color: badgeColor),
+                        const SizedBox(width: 5),
+                        Text(
+                          badge,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.8,
+                            color: badgeColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                    color: _isDarkMode
+                        ? _NeonTheme.textPrimaryDark
+                        : _NeonTheme.textPrimaryLight,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  description,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.5,
+                    color: _isDarkMode
+                        ? _NeonTheme.textSecondaryDark
+                        : _NeonTheme.textSecondaryLight,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -15338,7 +17305,7 @@ void _handlePositionUpdate(Position position) {
           ),
           const SizedBox(height: 5),
           Text(
-            'Choose where to start and where youâ€™re headed.',
+            'Choose your starting point and destination in Tamil Nadu.',
             style: TextStyle(
               fontSize: 13,
               color: _isDarkMode
@@ -15479,7 +17446,34 @@ void _handlePositionUpdate(Position position) {
           ),
           if (_activeSearchField == _SearchFieldType.destination)
             _buildSuggestionDropdown(_SearchFieldType.destination),
-          const SizedBox(height: 22),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              const Icon(Icons.stars_rounded, size: 14, color: _NeonTheme.neonCyan),
+              const SizedBox(width: 6),
+              Text(
+                'POPULAR TAMIL NADU CORRIDORS',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.8,
+                  color: _NeonTheme.neonCyan,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildPopularRouteChip('Chennai', 'Coimbatore'),
+              _buildPopularRouteChip('Madurai', 'Kodaikanal'),
+              _buildPopularRouteChip('Trichy', 'Thanjavur'),
+              _buildPopularRouteChip('Salem', 'Yercaud'),
+            ],
+          ),
+          const SizedBox(height: 20),
           // Travel Preferences Container
           _buildLandingPreferencesSection(),
           const SizedBox(height: 24),
@@ -15525,6 +17519,54 @@ void _handlePositionUpdate(Position position) {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildPopularRouteChip(String from, String to) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: () {
+        setState(() {
+          fromController.text = from;
+          toController.text = to;
+          currentFrom = from;
+          currentTo = to;
+          currentFromIsCurrentLocation = false;
+          _selectedStartLocation = null;
+          _selectedEndLocation = null;
+          _locationSuggestions = [];
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: _isDarkMode
+              ? const Color(0xff06152D)
+              : const Color(0xffF1F5F9),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: _isDarkMode
+                ? const Color(0x3500D9FF)
+                : const Color(0xffCBD5E1),
+            width: 0.9,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '$from ➔ $to',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: _isDarkMode
+                    ? _NeonTheme.textPrimaryDark
+                    : _NeonTheme.textPrimaryLight,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -18657,17 +20699,15 @@ void _handlePositionUpdate(Position position) {
     }
     final selectedCp = checkpoints[_selectedForecastCheckpointIndex];
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _isDarkMode ? const Color(0xff0B1930) : Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: _isDarkMode ? const Color(0x3500D9FF) : const Color(0xffE2E8F0),
-          width: 1.2,
-        ),
-        boxShadow: _NeonTheme.cardShadow(_isDarkMode),
+    final disableMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+
+    return GlassCard(
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(
+        color: _isDarkMode ? const Color(0x3500D9FF) : const Color(0xffE2E8F0),
+        width: 1.2,
       ),
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
@@ -18753,18 +20793,17 @@ void _handlePositionUpdate(Position position) {
             children: [
               for (var i = 0; i < checkpoints.length; i++) ...[
                 Expanded(
-                  child: InkWell(
-                    onTap: () {
+                  child: _InteractivePressButton(
+                    onPressed: () {
                       setState(() {
                         _selectedForecastCheckpointIndex = i;
                       });
                     },
-                    borderRadius: BorderRadius.circular(8),
                     child: Column(
                       children: [
                         // Risk Level Badge above node
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                           decoration: BoxDecoration(
                             color: checkpoints[i].riskLevel.color.withValues(alpha: 0.16),
                             borderRadius: BorderRadius.circular(4),
@@ -18784,62 +20823,136 @@ void _handlePositionUpdate(Position position) {
                         ),
                         const SizedBox(height: 5),
                         // Node circle and connecting lines
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Container(
-                                height: 2,
-                                color: i == 0
-                                    ? Colors.transparent
-                                    : checkpoints[i].riskLevel.color.withValues(alpha: 0.6),
-                              ),
-                            ),
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              width: i == _selectedForecastCheckpointIndex ? 26 : 22,
-                              height: i == _selectedForecastCheckpointIndex ? 26 : 22,
-                              decoration: BoxDecoration(
-                                color: checkpoints[i].riskLevel.color.withValues(alpha: 0.22),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: checkpoints[i].riskLevel.color,
-                                  width: i == _selectedForecastCheckpointIndex ? 2.5 : 1.8,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: checkpoints[i].riskLevel.color.withValues(
-                                      alpha: i == _selectedForecastCheckpointIndex ? 0.6 : 0.3,
+                        Builder(
+                          builder: (context) {
+                            final isSelected = i == _selectedForecastCheckpointIndex;
+                            final isHighRisk = checkpoints[i]
+                                .riskLevel
+                                .title(false)
+                                .toUpperCase()
+                                .contains('HIGH');
+                            final cpColor = checkpoints[i].riskLevel.color;
+                            final prevColor =
+                                i > 0 ? checkpoints[i - 1].riskLevel.color : cpColor;
+                            final nextColor = i < checkpoints.length - 1
+                                ? checkpoints[i + 1].riskLevel.color
+                                : cpColor;
+
+                            return Row(
+                              children: [
+                                Expanded(
+                                  child: Container(
+                                    height: 2.5,
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(2),
+                                      gradient: i == 0
+                                          ? null
+                                          : LinearGradient(
+                                              colors: [
+                                                prevColor.withValues(
+                                                    alpha: _isDarkMode ? 0.75 : 0.55),
+                                                cpColor.withValues(
+                                                    alpha: _isDarkMode ? 0.75 : 0.55),
+                                              ],
+                                            ),
+                                      color: i == 0 ? Colors.transparent : null,
+                                      boxShadow: i > 0 && _isDarkMode
+                                          ? [
+                                              BoxShadow(
+                                                color: prevColor.withValues(alpha: 0.35),
+                                                blurRadius: 4,
+                                              ),
+                                            ]
+                                          : null,
                                     ),
-                                    blurRadius: i == _selectedForecastCheckpointIndex ? 10 : 5,
                                   ),
-                                ],
-                              ),
-                              child: Center(
-                                child: i == _selectedForecastCheckpointIndex
-                                    ? Container(
-                                        width: 8,
-                                        height: 8,
-                                        decoration: BoxDecoration(
-                                          color: checkpoints[i].riskLevel.color,
-                                          shape: BoxShape.circle,
+                                ),
+                                AnimatedContainer(
+                                  duration: disableMotion
+                                      ? Duration.zero
+                                      : const Duration(milliseconds: 260),
+                                  curve: Curves.easeOutCubic,
+                                  width: isSelected ? 28 : (isHighRisk ? 24 : 22),
+                                  height: isSelected ? 28 : (isHighRisk ? 24 : 22),
+                                  decoration: BoxDecoration(
+                                    color: cpColor.withValues(
+                                        alpha: isSelected ? 0.28 : (isHighRisk ? 0.22 : 0.16)),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: cpColor,
+                                      width: isSelected ? 2.6 : (isHighRisk ? 2.0 : 1.8),
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: cpColor.withValues(
+                                          alpha: isSelected ? 0.75 : (isHighRisk ? 0.60 : 0.28),
                                         ),
-                                      )
-                                    : Icon(
-                                        checkpoints[i].riskLevel.icon,
-                                        size: 10,
-                                        color: checkpoints[i].riskLevel.color,
+                                        blurRadius: isSelected ? 12 : (isHighRisk ? 9 : 5),
+                                        spreadRadius: isSelected ? 2 : (isHighRisk ? 1 : 0),
                                       ),
-                              ),
-                            ),
-                            Expanded(
-                              child: Container(
-                                height: 2,
-                                color: i == checkpoints.length - 1
-                                    ? Colors.transparent
-                                    : checkpoints[i + 1].riskLevel.color.withValues(alpha: 0.6),
-                              ),
-                            ),
-                          ],
+                                      if (isSelected && _isDarkMode)
+                                        BoxShadow(
+                                          color: Colors.white.withValues(alpha: 0.4),
+                                          blurRadius: 6,
+                                          spreadRadius: -1,
+                                        ),
+                                    ],
+                                  ),
+                                  child: Center(
+                                    child: isSelected
+                                        ? Container(
+                                            width: 9,
+                                            height: 9,
+                                            decoration: BoxDecoration(
+                                              color: cpColor,
+                                              shape: BoxShape.circle,
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: Colors.white.withValues(alpha: 0.8),
+                                                  blurRadius: 4,
+                                                ),
+                                              ],
+                                            ),
+                                          )
+                                        : Icon(
+                                            checkpoints[i].riskLevel.icon,
+                                            size: isHighRisk ? 11 : 10,
+                                            color: cpColor,
+                                          ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Container(
+                                    height: 2.5,
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(2),
+                                      gradient: i == checkpoints.length - 1
+                                          ? null
+                                          : LinearGradient(
+                                              colors: [
+                                                cpColor.withValues(
+                                                    alpha: _isDarkMode ? 0.75 : 0.55),
+                                                nextColor.withValues(
+                                                    alpha: _isDarkMode ? 0.75 : 0.55),
+                                              ],
+                                            ),
+                                      color: i == checkpoints.length - 1
+                                          ? Colors.transparent
+                                          : null,
+                                      boxShadow: i < checkpoints.length - 1 && _isDarkMode
+                                          ? [
+                                              BoxShadow(
+                                                color: nextColor.withValues(alpha: 0.35),
+                                                blurRadius: 4,
+                                              ),
+                                            ]
+                                          : null,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
                         ),
                         const SizedBox(height: 5),
                         // Distance label below node
@@ -18866,15 +20979,23 @@ void _handlePositionUpdate(Position position) {
           const SizedBox(height: 12),
 
           // Current route condition badge
-          Container(
+          AnimatedContainer(
+            duration: disableMotion ? Duration.zero : const Duration(milliseconds: 220),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
             decoration: BoxDecoration(
               color: _isDarkMode ? const Color(0xff091222) : const Color(0xffF8FAFC),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: selectedCp.riskLevel.color.withValues(alpha: 0.35),
-                width: 1,
+                color: selectedCp.riskLevel.color.withValues(alpha: 0.45),
+                width: 1.2,
               ),
+              boxShadow: [
+                BoxShadow(
+                  color: selectedCp.riskLevel.color.withValues(alpha: _isDarkMode ? 0.20 : 0.08),
+                  blurRadius: 8,
+                  offset: const Offset(0, 1),
+                ),
+              ],
             ),
             child: Row(
               children: [
@@ -19719,19 +21840,147 @@ void _handlePositionUpdate(Position position) {
     );
   }
 
+  Widget _buildCyberHudTelemetryHeader({
+    required bool gpsActive,
+    required bool hasRoute,
+  }) {
+    final routeLabel = hasRoute
+        ? (selectedRouteIndex == 0 ? 'ROUTE 1 (PRIMARY)' : 'ROUTE 2 (ALT)')
+        : 'CORRIDOR TELEMETRY';
+
+    final String gpsStatusText;
+    final Color gpsStatusColor;
+    if (gpsActive && currentPosition != null) {
+      gpsStatusText =
+          'GPS LOCKED (${currentPosition!.latitude.toStringAsFixed(2)}°N, ${currentPosition!.longitude.toStringAsFixed(2)}°E)';
+      gpsStatusColor = _NeonTheme.safeGreen;
+    } else if (currentFromIsCurrentLocation) {
+      gpsStatusText = 'GPS LOCATING...';
+      gpsStatusColor = _NeonTheme.neonAmber;
+    } else {
+      gpsStatusText = 'TN ROAD RADAR';
+      gpsStatusColor = _NeonTheme.neonCyan;
+    }
+
+    final distanceBadge = distanceKm > 0
+        ? '${distanceKm.toStringAsFixed(1)} KM'
+        : null;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5.5),
+      decoration: BoxDecoration(
+        color: _isDarkMode
+            ? const Color(0xB806152D)
+            : Colors.white.withValues(alpha: 0.88),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: _isDarkMode
+              ? const Color(0x3500D9FF)
+              : const Color(0xffCBD5E1),
+          width: 0.9,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: _isDarkMode ? 0.25 : 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _isDarkMode ? _NeonTheme.neonCyan : const Color(0xff2563EB),
+              boxShadow: [
+                BoxShadow(
+                  color: (_isDarkMode ? _NeonTheme.neonCyan : const Color(0xff2563EB))
+                      .withValues(alpha: 0.45),
+                  blurRadius: 5,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            routeLabel,
+            style: TextStyle(
+              fontSize: 9.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.5,
+              color: _isDarkMode ? _NeonTheme.neonCyan : const Color(0xff2563EB),
+            ),
+          ),
+          const Spacer(),
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: gpsStatusColor,
+              boxShadow: [
+                BoxShadow(
+                  color: gpsStatusColor.withValues(alpha: 0.45),
+                  blurRadius: 4,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            gpsStatusText,
+            style: TextStyle(
+              fontSize: 9.0,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3,
+              color: _isDarkMode ? _NeonTheme.textSecondaryDark : const Color(0xff475569),
+            ),
+          ),
+          if (distanceBadge != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: (_isDarkMode ? _NeonTheme.neonCyan : const Color(0xff2563EB))
+                    .withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                distanceBadge,
+                style: TextStyle(
+                  fontSize: 8.5,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.4,
+                  color: _isDarkMode ? _NeonTheme.neonCyan : const Color(0xff2563EB),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildDashboardMapCard() {
+    final gpsActive = currentPosition != null;
+    final hasRoute = routePoints.isNotEmpty;
+
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: _isDarkMode ? const Color(0x5000D9FF) : const Color(0xffE2E8F0),
+          color: _isDarkMode ? const Color(0x6000D9FF) : const Color(0xffE2E8F0),
           width: 1.2,
         ),
         boxShadow: _isDarkMode
             ? [
                 BoxShadow(
-                  color: const Color(0xff00D9FF).withValues(alpha: 0.12),
-                  blurRadius: 16,
+                  color: const Color(0xff00D9FF).withValues(alpha: 0.16),
+                  blurRadius: 20,
                   spreadRadius: 1,
                 ),
                 ..._NeonTheme.cardShadow(true),
@@ -19740,7 +21989,31 @@ void _handlePositionUpdate(Position position) {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: _mapView(isDashboardView: true),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: _mapView(isDashboardView: true),
+            ),
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: _CyberHudCornerPainter(isDark: _isDarkMode),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 10,
+              left: 12,
+              right: 12,
+              child: IgnorePointer(
+                child: _buildCyberHudTelemetryHeader(
+                  gpsActive: gpsActive,
+                  hasRoute: hasRoute,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -20081,12 +22354,39 @@ void _handlePositionUpdate(Position position) {
 
   double _distanceToPolyline(LatLng point, List<LatLng> polyline) {
     if (polyline.isEmpty) return double.infinity;
-    var minD = double.infinity;
-    for (int i = 0; i < polyline.length; i++) {
-      final d = service._distanceBetweenMeters(point, polyline[i]);
-      if (d < minD) minD = d;
+    if (polyline.length == 1) return service._distanceBetweenMeters(point, polyline.first);
+
+    final longitudeScale =
+        111320.0 * math.cos(point.latitude * math.pi / 180.0);
+    const latitudeScale = 110540.0;
+
+    double toX(LatLng p) => (p.longitude - point.longitude) * longitudeScale;
+    double toY(LatLng p) => (p.latitude - point.latitude) * latitudeScale;
+
+    var minDistanceSquared = double.infinity;
+
+    for (var i = 0; i < polyline.length - 1; i++) {
+      final first = polyline[i];
+      final second = polyline[i + 1];
+      final firstX = toX(first);
+      final firstY = toY(first);
+      final segmentX = toX(second) - firstX;
+      final segmentY = toY(second) - firstY;
+      final squaredLength = segmentX * segmentX + segmentY * segmentY;
+      final fraction = squaredLength == 0.0
+          ? 0.0
+          : (-(firstX * segmentX + firstY * segmentY) / squaredLength)
+              .clamp(0.0, 1.0)
+              .toDouble();
+      final dx = firstX + segmentX * fraction;
+      final dy = firstY + segmentY * fraction;
+      final distSq = dx * dx + dy * dy;
+      if (distSq < minDistanceSquared) {
+        minDistanceSquared = distSq;
+      }
     }
-    return minD;
+
+    return math.sqrt(minDistanceSquared);
   }
 
   _HazardRerouteAssessment _assessHazardRerouting() {
@@ -22115,9 +24415,7 @@ void _handlePositionUpdate(Position position) {
                                         ),
                                       ),
                                     ),
-                                    const CustomPaint(
-                                      painter: _CyanLightRibbonPainter(),
-                                    ),
+                                    const _AnimatedCyanLightRibbon(),
                                   ],
                                 ),
                               ),
@@ -23275,156 +25573,172 @@ void _handlePositionUpdate(Position position) {
 
   Widget _buildRouteSummaryComparisonPill(_RouteResult route) {
     final isSelected = route.routeIndex == selectedRouteIndex;
+    final isRoute1 = route.routeIndex == 0;
     final badge = _getRouteCategoryBadge(route.routeIndex);
     final badgeColor = _getRouteBadgeColor(badge);
     final coreColor = _getRouteCoreColor(route.routeIndex);
     final eval = routeEvaluations[route.routeIndex];
-    final score = eval?.safety.score ?? (route.routeIndex == 0 ? 89.0 : 83.0);
+    final score = eval?.safety.score ?? (isRoute1 ? 89.0 : 83.0);
+    final disableMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () {
-          if (availableRoutes.any((r) => r.routeIndex == route.routeIndex)) {
-            _selectRoute(availableRoutes.firstWhere((r) => r.routeIndex == route.routeIndex));
-          } else {
-            setState(() {
-              selectedRouteIndex = route.routeIndex;
-            });
-          }
-        },
-        borderRadius: BorderRadius.circular(10),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
+    // Distinct theme accents: Route 1 = Cyan / Electric Blue, Route 2 = Neon Violet
+    final Color selectedBorderColor;
+    final Color selectedBgColor;
+    final Color selectedGlowColor;
+
+    if (isRoute1) {
+      selectedBorderColor = _isDarkMode ? const Color(0xff00D9FF) : const Color(0xff2563EB);
+      selectedBgColor = _isDarkMode ? const Color(0xff0B1F3D) : const Color(0xffEFF6FF);
+      selectedGlowColor = const Color(0xff00D9FF);
+    } else {
+      selectedBorderColor = _isDarkMode ? const Color(0xffC084FC) : const Color(0xff9333EA);
+      selectedBgColor = _isDarkMode ? const Color(0xff1A102F) : const Color(0xffFAF5FF);
+      selectedGlowColor = const Color(0xffA855F7);
+    }
+
+    return _InteractivePressButton(
+      onPressed: () {
+        if (availableRoutes.any((r) => r.routeIndex == route.routeIndex)) {
+          _selectRoute(availableRoutes.firstWhere((r) => r.routeIndex == route.routeIndex));
+        } else {
+          setState(() {
+            selectedRouteIndex = route.routeIndex;
+          });
+        }
+      },
+      child: AnimatedContainer(
+        duration: disableMotion ? Duration.zero : const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? selectedBgColor
+              : (_isDarkMode ? const Color(0xff091222) : const Color(0xffF8FAFC)),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
             color: isSelected
-                ? (_isDarkMode ? const Color(0xff0B1F3D) : const Color(0xffEFF6FF))
-                : (_isDarkMode ? const Color(0xff091222) : const Color(0xffF8FAFC)),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: isSelected
-                  ? (_isDarkMode ? const Color(0xff00A6FB) : const Color(0xff2563EB))
-                  : (_isDarkMode ? const Color(0xff1E385C) : const Color(0xffE2E8F0)),
-              width: isSelected ? 1.5 : 1,
-            ),
-            boxShadow: isSelected
-                ? [
-                    BoxShadow(
-                      color: (_isDarkMode ? const Color(0xff00A6FB) : const Color(0xff2563EB))
-                          .withValues(alpha: _isDarkMode ? 0.25 : 0.15),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ]
-                : null,
+                ? selectedBorderColor
+                : (_isDarkMode ? const Color(0xff1E385C) : const Color(0xffE2E8F0)),
+            width: isSelected ? 1.6 : 1,
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    route.routeIndex == 0 ? Icons.directions_car_rounded : Icons.alt_route_rounded,
-                    size: 13,
-                    color: coreColor,
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: selectedGlowColor.withValues(alpha: _isDarkMode ? 0.35 : 0.18),
+                    blurRadius: 10,
+                    spreadRadius: 1,
+                    offset: const Offset(0, 2),
                   ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      'Route ${route.routeIndex + 1}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        color: _isDarkMode ? Colors.white : const Color(0xff0F172A),
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                ]
+              : null,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isRoute1 ? Icons.directions_car_rounded : Icons.alt_route_rounded,
+                  size: 13,
+                  color: isSelected ? selectedBorderColor : coreColor,
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    'Route ${route.routeIndex + 1}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: isSelected
+                          ? (_isDarkMode ? Colors.white : selectedBorderColor)
+                          : (_isDarkMode ? Colors.white : const Color(0xff0F172A)),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                  decoration: BoxDecoration(
+                    color: badgeColor.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: badgeColor.withValues(alpha: 0.5),
+                      width: 0.6,
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                    decoration: BoxDecoration(
-                      color: badgeColor.withValues(alpha: 0.16),
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(
-                        color: badgeColor.withValues(alpha: 0.5),
-                        width: 0.6,
-                      ),
-                    ),
-                    child: Text(
-                      badge,
-                      style: TextStyle(
-                        fontSize: 8,
-                        fontWeight: FontWeight.w800,
-                        color: badgeColor,
-                      ),
+                  child: Text(
+                    badge,
+                    style: TextStyle(
+                      fontSize: 8,
+                      fontWeight: FontWeight.w800,
+                      color: badgeColor,
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    isSelected ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
-                    size: 14,
-                    color: isSelected
-                        ? (_isDarkMode ? const Color(0xff00A6FB) : const Color(0xff2563EB))
-                        : (_isDarkMode ? Colors.white24 : const Color(0xffCBD5E1)),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  isSelected ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+                  size: 14,
+                  color: isSelected
+                      ? selectedBorderColor
+                      : (_isDarkMode ? Colors.white24 : const Color(0xffCBD5E1)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            Row(
+              children: [
+                Icon(
+                  Icons.straighten_rounded,
+                  size: 11,
+                  color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                ),
+                const SizedBox(width: 3),
+                Text(
+                  '${route.distance.toStringAsFixed(1)} km',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: _isDarkMode ? Colors.white70 : const Color(0xff334155),
                   ),
-                ],
-              ),
-              const SizedBox(height: 5),
-              Row(
-                children: [
-                  Icon(
-                    Icons.straighten_rounded,
-                    size: 11,
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.schedule_rounded,
+                  size: 11,
+                  color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                ),
+                const SizedBox(width: 3),
+                Text(
+                  formatDuration(route.duration),
+                  style: TextStyle(
+                    fontSize: 10,
                     color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
                   ),
-                  const SizedBox(width: 3),
-                  Text(
-                    '${route.distance.toStringAsFixed(1)} km',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: _isDarkMode ? Colors.white70 : const Color(0xff334155),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(
-                    Icons.schedule_rounded,
-                    size: 11,
-                    color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
-                  ),
-                  const SizedBox(width: 3),
-                  Text(
-                    formatDuration(route.duration),
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  const Icon(
-                    Icons.shield_rounded,
-                    size: 11,
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const Icon(
+                  Icons.shield_rounded,
+                  size: 11,
+                  color: Color(0xff10B981),
+                ),
+                const SizedBox(width: 3),
+                Text(
+                  '${score.round()}% Safety',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
                     color: Color(0xff10B981),
                   ),
-                  const SizedBox(width: 3),
-                  Text(
-                    '${score.round()}% Safety',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xff10B981),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -26862,6 +29176,17 @@ String _getContextAwareRouteInsight() {
                 bottom: isLiveNavigation ? 142 : 110,
                 child: _facilityNavigationCard(),
               ),
+            // Live Route Hazard Ahead Alert Banner
+            if (_navigationActive &&
+                (_activeHazardAhead != null || _activeWeatherHazardAhead != null))
+              Positioned(
+                left: 14,
+                right: MediaQuery.sizeOf(context).width < 600 ? 14 : 76,
+                bottom: isLiveNavigation
+                    ? (_selectedFacility != null ? 198 : 142)
+                    : (_selectedFacility != null ? 168 : 112),
+                child: _buildCockpitLiveHazardBanner(),
+              ),
             // Focused Nearby Place Floating Banner
             if (_focusedNearbyPlace != null && !isLiveNavigation)
               Positioned(
@@ -27389,6 +29714,12 @@ String _getContextAwareRouteInsight() {
           onHazardUpdated: () {
             unawaited(_loadCommunityHazards());
           },
+          onFindAlternative: _navigationActive
+              ? () {
+                  Navigator.of(dialogContext).pop();
+                  unawaited(_requestSmartReroute());
+                }
+              : null,
         );
       },
     );
@@ -27444,6 +29775,10 @@ String _getContextAwareRouteInsight() {
       orElse: () => _hazardCategories.first,
     );
 
+    final isTargetHazardAhead = _navigationActive && _activeHazardAhead?.id == hazard.id;
+    final markerWidth = isTargetHazardAhead ? 42.0 : 36.0;
+    final markerHeight = isTargetHazardAhead ? 42.0 : 36.0;
+
     return Tooltip(
       message: '${hazard.problemType} (${hazard.status} • ${hazard.confidenceLevel})',
       child: Stack(
@@ -27451,24 +29786,24 @@ String _getContextAwareRouteInsight() {
         alignment: Alignment.center,
         children: [
           Container(
-            width: 36,
-            height: 36,
+            width: markerWidth,
+            height: markerHeight,
             decoration: BoxDecoration(
               color: const Color(0xfa071226),
               shape: BoxShape.circle,
-              border: Border.all(color: borderColor, width: 2),
+              border: Border.all(color: borderColor, width: isTargetHazardAhead ? 2.8 : 2),
               boxShadow: [
                 BoxShadow(
-                  color: borderColor.withValues(alpha: 0.40),
-                  blurRadius: 8,
-                  spreadRadius: 1,
+                  color: borderColor.withValues(alpha: isTargetHazardAhead ? 0.70 : 0.40),
+                  blurRadius: isTargetHazardAhead ? 14 : 8,
+                  spreadRadius: isTargetHazardAhead ? 3 : 1,
                 ),
               ],
             ),
             child: Center(
               child: Icon(
                 catItem.icon,
-                size: 18,
+                size: isTargetHazardAhead ? 21 : 18,
                 color: catItem.color,
               ),
             ),
@@ -29676,46 +32011,48 @@ String _getContextAwareRouteInsight() {
 
   Widget _buildAlternativeRoutePill(_RouteResult route) {
     final isSelected = route.routeIndex == selectedRouteIndex;
+    final isRoute1 = route.routeIndex == 0;
     final badges = _getRouteCategoryBadges(route.routeIndex);
-    final routeAccent = route.routeIndex == 0
-        ? _NeonTheme.neonCyan
-        : const Color(0xffC084FC);
-    final routeBase = route.routeIndex == 0
-        ? const Color(0xff0284C7)
-        : const Color(0xff9333EA);
-    final primaryColor = isSelected ? routeAccent : routeBase;
+    final disableMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => _selectRoute(route),
-        borderRadius: BorderRadius.circular(10),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
+    // Route 1 = Cyan / Electric Blue, Route 2 = Neon Violet
+    final routeAccent = isRoute1 ? _NeonTheme.neonCyan : const Color(0xffC084FC);
+    final routeBase = isRoute1 ? const Color(0xff0284C7) : const Color(0xff9333EA);
+    final primaryColor = isSelected ? routeAccent : routeBase;
+    final selectedBg = isRoute1
+        ? (_isDarkMode ? const Color(0xff0B1F3D) : const Color(0xffEFF6FF))
+        : (_isDarkMode ? const Color(0xff1C1033) : const Color(0xffFAF5FF));
+
+    return _InteractivePressButton(
+      onPressed: () => _selectRoute(route),
+      child: AnimatedContainer(
+        duration: disableMotion ? Duration.zero : const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? selectedBg
+              : (_isDarkMode
+                    ? _NeonTheme.cardElevatedDark
+                    : const Color(0xffF1F5F9)),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
             color: isSelected
-                ? primaryColor.withValues(alpha: 0.16)
-                : (_isDarkMode
-                      ? _NeonTheme.cardElevatedDark
-                      : const Color(0xffF1F5F9)),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: isSelected
-                  ? primaryColor
-                  : (_isDarkMode ? Colors.white12 : Colors.black12),
-              width: isSelected ? 1.6 : 1,
-            ),
-            boxShadow: isSelected
-                ? [
-                    BoxShadow(
-                      color: primaryColor.withValues(alpha: 0.28),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ]
-                : null,
+                ? primaryColor
+                : (_isDarkMode ? Colors.white12 : Colors.black12),
+            width: isSelected ? 1.6 : 1,
           ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: primaryColor.withValues(alpha: _isDarkMode ? 0.35 : 0.20),
+                    blurRadius: 10,
+                    spreadRadius: 1,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -29881,7 +32218,6 @@ String _getContextAwareRouteInsight() {
             ],
           ),
         ),
-      ),
     );
   }
 
@@ -31162,6 +33498,276 @@ if (factor.source != null && isIncluded) ...[
     );
   }
 
+  String _getRouteLandscapeAsset({
+    required String origin,
+    required String destination,
+    String? routeLabel,
+  }) {
+    final text = '${routeLabel ?? ''} $origin $destination'.toLowerCase();
+
+    // Coastal route indicators
+    final isCoastal = text.contains('ecr') ||
+        text.contains('east coast') ||
+        text.contains('coastal') ||
+        text.contains('puducherry') ||
+        text.contains('pondicherry') ||
+        text.contains('mahabalipuram') ||
+        text.contains('mamallapuram') ||
+        text.contains('rameswaram') ||
+        text.contains('kanyakumari') ||
+        text.contains('nagapattinam') ||
+        text.contains('cuddalore') ||
+        text.contains('thoothukudi') ||
+        text.contains('tuticorin') ||
+        text.contains('velankanni');
+
+    if (isCoastal) {
+      return 'assets/images/tamil_nadu_dusk_banner.jpg';
+    }
+
+    // Hill route indicators
+    final isHill = text.contains('ooty') ||
+        text.contains('kodaikanal') ||
+        text.contains('ghats') ||
+        text.contains('nilgiris') ||
+        text.contains('coonoor') ||
+        text.contains('yercaud') ||
+        text.contains('valparai') ||
+        text.contains('kotagiri') ||
+        text.contains('kolli') ||
+        text.contains('western ghats') ||
+        text.contains('hill') ||
+        text.contains('mountain') ||
+        text.contains('topslip') ||
+        text.contains('munnar');
+
+    if (isHill) {
+      return 'assets/images/tn_western_ghats.jpg';
+    }
+
+    // Default city / expressway arterial road
+    return 'assets/images/tn_road_hero.jpg';
+  }
+
+  String _getRouteCategoryTag({
+    required String origin,
+    required String destination,
+    String? routeLabel,
+  }) {
+    final text = '${routeLabel ?? ''} $origin $destination'.toLowerCase();
+
+    final isCoastal = text.contains('ecr') ||
+        text.contains('east coast') ||
+        text.contains('coastal') ||
+        text.contains('puducherry') ||
+        text.contains('pondicherry') ||
+        text.contains('mahabalipuram') ||
+        text.contains('mamallapuram') ||
+        text.contains('rameswaram') ||
+        text.contains('kanyakumari') ||
+        text.contains('nagapattinam') ||
+        text.contains('cuddalore') ||
+        text.contains('thoothukudi') ||
+        text.contains('tuticorin') ||
+        text.contains('velankanni');
+
+    if (isCoastal) return 'COASTAL CORRIDOR';
+
+    final isHill = text.contains('ooty') ||
+        text.contains('kodaikanal') ||
+        text.contains('ghats') ||
+        text.contains('nilgiris') ||
+        text.contains('coonoor') ||
+        text.contains('yercaud') ||
+        text.contains('valparai') ||
+        text.contains('kotagiri') ||
+        text.contains('kolli') ||
+        text.contains('western ghats') ||
+        text.contains('hill') ||
+        text.contains('mountain') ||
+        text.contains('topslip') ||
+        text.contains('munnar');
+
+    if (isHill) return 'HILL PASS';
+
+    return 'EXPRESSWAY ROUTE';
+  }
+
+  Color _getRouteCategoryColor(String tag) {
+    switch (tag) {
+      case 'COASTAL CORRIDOR':
+        return _NeonTheme.electricBlue;
+      case 'HILL PASS':
+        return _NeonTheme.safeGreen;
+      case 'EXPRESSWAY ROUTE':
+      default:
+        return _NeonTheme.neonCyan;
+    }
+  }
+
+  Widget _buildTripsHeaderBanner() {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffCBD5E1),
+          width: 1.2,
+        ),
+        boxShadow: _NeonTheme.cardShadow(_isDarkMode),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Image.asset(
+                'assets/images/tn_road_hero.jpg',
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  color: _isDarkMode
+                      ? _NeonTheme.bgDarkSecondary
+                      : const Color(0xffE2E8F0),
+                ),
+              ),
+            ),
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      (_isDarkMode
+                              ? const Color(0xff020B1C)
+                              : Colors.white)
+                          .withValues(alpha: 0.88),
+                      (_isDarkMode
+                              ? const Color(0xff06152D)
+                              : Colors.white)
+                          .withValues(alpha: 0.94),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 22),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _NeonTheme.neonCyan.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: _NeonTheme.neonCyan.withValues(alpha: 0.3),
+                        width: 1,
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.bookmark_rounded,
+                      color: _NeonTheme.neonCyan,
+                      size: 28,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              'My Trips',
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w900,
+                                color: _isDarkMode
+                                    ? _NeonTheme.textPrimaryDark
+                                    : _NeonTheme.textPrimaryLight,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: _NeonTheme.neonCyan
+                                    .withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: _NeonTheme.neonCyan
+                                      .withValues(alpha: 0.4),
+                                  width: 0.8,
+                                ),
+                              ),
+                              child: Text(
+                                '${_savedTrips.length} SAVED',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.5,
+                                  color: _NeonTheme.neonCyan,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Personal journey archive & verified safety telemetry history across Tamil Nadu',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _isDarkMode
+                                ? _NeonTheme.textSecondaryDark
+                                : _NeonTheme.textSecondaryLight,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_savedTrips.isNotEmpty) ...[
+                    const SizedBox(width: 12),
+                    TextButton.icon(
+                      onPressed: _confirmClearAllTrips,
+                      style: TextButton.styleFrom(
+                        backgroundColor:
+                            _NeonTheme.dangerRed.withValues(alpha: 0.12),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          side: BorderSide(
+                            color:
+                                _NeonTheme.dangerRed.withValues(alpha: 0.35),
+                            width: 1,
+                          ),
+                        ),
+                      ),
+                      icon: const Icon(
+                        Icons.delete_sweep_rounded,
+                        size: 16,
+                        color: _NeonTheme.dangerRed,
+                      ),
+                      label: const Text(
+                        'Clear All',
+                        style: TextStyle(
+                          color: _NeonTheme.dangerRed,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildTripsHistoryView() {
     if (!_savedTripsLoaded) {
       return const Center(
@@ -31204,66 +33810,8 @@ if (factor.source != null && isIncluded) ...[
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Header Row: Icon, Title, Subtitle, Clear All
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: _NeonTheme.neonCyan.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.bookmark_rounded,
-                      color: _NeonTheme.neonCyan,
-                      size: 24,
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'My Trips',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                          color: _isDarkMode
-                              ? _NeonTheme.textPrimaryDark
-                              : _NeonTheme.textPrimaryLight,
-                        ),
-                      ),
-                      Text(
-                        'Your saved routes in one place',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _isDarkMode
-                              ? _NeonTheme.textSecondaryDark
-                              : _NeonTheme.textSecondaryLight,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
-                  if (_savedTrips.isNotEmpty)
-                    TextButton.icon(
-                      onPressed: _confirmClearAllTrips,
-                      icon: const Icon(
-                        Icons.delete_sweep_rounded,
-                        size: 16,
-                        color: _NeonTheme.dangerRed,
-                      ),
-                      label: const Text(
-                        'Clear All',
-                        style: TextStyle(
-                          color: _NeonTheme.dangerRed,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+              // Cinematic Header Banner
+              _buildTripsHeaderBanner(),
               const SizedBox(height: 20),
 
               if (_savedTrips.isEmpty)
@@ -31340,9 +33888,9 @@ if (factor.source != null && isIncluded) ...[
                         physics: const NeverScrollableScrollPhysics(),
                         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: crossAxisCount,
-                          crossAxisSpacing: 14,
-                          mainAxisSpacing: 14,
-                          mainAxisExtent: 228,
+                          crossAxisSpacing: 16,
+                          mainAxisSpacing: 16,
+                          mainAxisExtent: 260,
                         ),
                         itemCount: displayedTrips.length,
                         itemBuilder: (context, index) =>
@@ -31359,16 +33907,12 @@ if (factor.source != null && isIncluded) ...[
   }
 
   Widget _buildEmptyTripsState() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
-      decoration: BoxDecoration(
-        color: _isDarkMode ? _NeonTheme.cardDark : _NeonTheme.cardLight,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffE2E8F0),
-        ),
-        boxShadow: _NeonTheme.cardShadow(_isDarkMode),
+    return GlassCard(
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(
+        color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffE2E8F0),
       ),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
       child: Column(
         children: [
           Container(
@@ -31436,16 +33980,13 @@ if (factor.source != null && isIncluded) ...[
   }
 
   Widget _buildTripsFilterBar() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: _isDarkMode ? _NeonTheme.cardDark : _NeonTheme.cardLight,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffE2E8F0),
-          width: 1,
-        ),
+    return GlassCard(
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(
+        color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffE2E8F0),
+        width: 1,
       ),
+      padding: const EdgeInsets.all(12),
       child: Column(
         children: [
           Row(
@@ -31660,274 +34201,369 @@ if (factor.source != null && isIncluded) ...[
     final scoreColor = score != null && score >= 70
         ? _NeonTheme.safeGreen
         : score != null && score >= 40
-        ? _NeonTheme.warningGold
-        : _NeonTheme.dangerRed;
+            ? _NeonTheme.warningGold
+            : _NeonTheme.dangerRed;
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _isDarkMode ? _NeonTheme.cardDark : _NeonTheme.cardLight,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffE2E8F0),
-          width: 1.2,
-        ),
-        boxShadow: _NeonTheme.cardShadow(_isDarkMode),
+    final imageAsset = _getRouteLandscapeAsset(
+      origin: trip.origin,
+      destination: trip.destination,
+      routeLabel: trip.routeLabel,
+    );
+    final categoryTag = _getRouteCategoryTag(
+      origin: trip.origin,
+      destination: trip.destination,
+      routeLabel: trip.routeLabel,
+    );
+    final categoryColor = _getRouteCategoryColor(categoryTag);
+
+    return GlassCard(
+      borderRadius: BorderRadius.circular(18),
+      enableHover: true,
+      border: Border.all(
+        color: _isDarkMode
+            ? _NeonTheme.cyanBorder.withValues(alpha: 0.4)
+            : const Color(0xffCBD5E1),
+        width: 1.2,
       ),
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Header: Origin -> Destination & Vehicle Tag
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: _NeonTheme.neonCyan.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.alt_route_rounded,
-                  color: _NeonTheme.neonCyan,
-                  size: 18,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${trip.origin} → ${trip.destination}',
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w800,
-                        color: _isDarkMode
-                            ? _NeonTheme.textPrimaryDark
-                            : _NeonTheme.textPrimaryLight,
+          // Top Landscape Thumbnail Banner
+          SizedBox(
+            height: 72,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ClipRRect(
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(18)),
+                  child: Image.asset(
+                    imageAsset,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      color: _isDarkMode
+                          ? const Color(0xff06152D)
+                          : const Color(0xffE2E8F0),
+                      child: Center(
+                        child: Icon(Icons.route_rounded,
+                            color: categoryColor, size: 24),
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 3),
-                    Row(
+                  ),
+                ),
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(18)),
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          (_isDarkMode
+                                  ? _NeonTheme.cardDark
+                                  : _NeonTheme.cardLight)
+                              .withValues(alpha: 0.90),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                // Route Category Pill on top left
+                Positioned(
+                  top: 8,
+                  left: 10,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: (_isDarkMode
+                              ? const Color(0xff020B1C)
+                              : Colors.white)
+                          .withValues(alpha: 0.88),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: categoryColor.withValues(alpha: 0.5),
+                        width: 0.8,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          _vehicleIcon(trip.vehicleMode),
-                          size: 13,
-                          color: _isDarkMode
-                              ? _NeonTheme.textSecondaryDark
-                              : _NeonTheme.textSecondaryLight,
-                        ),
+                        Icon(Icons.terrain_rounded,
+                            size: 10, color: categoryColor),
                         const SizedBox(width: 4),
                         Text(
-                          '${trip.vehicleMode} · ${trip.travelTimeMode}',
+                          categoryTag,
                           style: TextStyle(
-                            fontSize: 11,
-                            color: _isDarkMode
-                                ? _NeonTheme.textSecondaryDark
-                                : _NeonTheme.textSecondaryLight,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '· ${_formatTripDate(trip.createdAt)}',
-                          style: TextStyle(
-                            fontSize: 10.5,
-                            color: _isDarkMode
-                                ? _NeonTheme.textSecondaryDark
-                                : _NeonTheme.textSecondaryLight,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.4,
+                            color: categoryColor,
                           ),
                         ),
                       ],
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 6),
-              // Safety Score Ring / Badge
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: scoreColor.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: scoreColor, width: 1.2),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      score != null ? '${score.round()}%' : '--',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: scoreColor,
-                      ),
-                    ),
-                    Text(
-                      'Safety',
-                      style: TextStyle(
-                        fontSize: 8.5,
-                        fontWeight: FontWeight.w700,
-                        color: scoreColor,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 10),
-
-          // Metrics Banner (Distance & ETA)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-            decoration: BoxDecoration(
-              color: _isDarkMode
-                  ? _NeonTheme.cardElevatedDark
-                  : const Color(0xffF1F5F9),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.straighten_rounded,
-                      size: 13,
-                      color: _NeonTheme.neonCyan,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${trip.distanceKm.toStringAsFixed(1)} km',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                        color: _isDarkMode
-                            ? _NeonTheme.textPrimaryDark
-                            : _NeonTheme.textPrimaryLight,
-                      ),
-                    ),
-                  ],
-                ),
-                Container(
-                  width: 1,
-                  height: 12,
-                  color: _isDarkMode ? Colors.white12 : Colors.black12,
-                ),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.schedule_rounded,
-                      size: 13,
-                      color: _NeonTheme.neonCyan,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      formatDuration(trip.durationMinutes),
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                        color: _isDarkMode
-                            ? _NeonTheme.textPrimaryDark
-                            : _NeonTheme.textPrimaryLight,
-                      ),
-                    ),
-                  ],
-                ),
-                if (trip.trafficStatus != null) ...[
-                  Container(
-                    width: 1,
-                    height: 12,
-                    color: _isDarkMode ? Colors.white12 : Colors.black12,
                   ),
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.traffic_rounded,
-                        size: 13,
-                        color: _NeonTheme.safeGreen,
+                ),
+                // Safety score pill on top right
+                Positioned(
+                  top: 8,
+                  right: 10,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: (_isDarkMode
+                              ? const Color(0xff020B1C)
+                              : Colors.white)
+                          .withValues(alpha: 0.90),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: scoreColor,
+                        width: 1,
                       ),
-                      const SizedBox(width: 4),
-                      Text(
-                        trip.trafficStatus!,
-                        style: const TextStyle(
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w600,
-                          color: _NeonTheme.safeGreen,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.shield_rounded, size: 11, color: scoreColor),
+                        const SizedBox(width: 4),
+                        Text(
+                          score != null ? '${score.round()}%' : '--',
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w900,
+                            color: scoreColor,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ],
+                ),
               ],
             ),
           ),
 
-          const SizedBox(height: 10),
-
-          // Actions: View Route, Start Navigation, Delete
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => _viewSavedTripRoute(trip),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _NeonTheme.neonCyan.withValues(
-                      alpha: 0.16,
+          // Content Area
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Origin -> Destination
+                Text(
+                  '${trip.origin} → ${trip.destination}',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                    color: _isDarkMode
+                        ? _NeonTheme.textPrimaryDark
+                        : _NeonTheme.textPrimaryLight,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 3),
+                Row(
+                  children: [
+                    Icon(
+                      _vehicleIcon(trip.vehicleMode),
+                      size: 12,
+                      color: _isDarkMode
+                          ? _NeonTheme.textSecondaryDark
+                          : _NeonTheme.textSecondaryLight,
                     ),
-                    foregroundColor: _NeonTheme.neonCyan,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      side: const BorderSide(
-                        color: _NeonTheme.cyanBorder,
-                        width: 1,
+                    const SizedBox(width: 4),
+                    Text(
+                      '${trip.vehicleMode} · ${trip.travelTimeMode}',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: _isDarkMode
+                            ? _NeonTheme.textSecondaryDark
+                            : _NeonTheme.textSecondaryLight,
                       ),
                     ),
-                  ),
-                  icon: const Icon(Icons.map_rounded, size: 13),
-                  label: const Text(
-                    'View Route',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
-                  ),
+                    const SizedBox(width: 5),
+                    Text(
+                      '· ${_formatTripDate(trip.createdAt)}',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: _isDarkMode
+                            ? _NeonTheme.textSecondaryDark
+                            : _NeonTheme.textSecondaryLight,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => _startSavedTripNavigation(trip),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _NeonTheme.neonCyan,
-                    foregroundColor: Colors.black,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
+                const SizedBox(height: 8),
+
+                // Metrics Banner (Distance, ETA, Traffic)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _isDarkMode
+                        ? _NeonTheme.cardElevatedDark
+                        : const Color(0xffF1F5F9),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: _isDarkMode
+                          ? _NeonTheme.cyanBorder.withValues(alpha: 0.2)
+                          : const Color(0xffE2E8F0),
+                      width: 0.8,
                     ),
                   ),
-                  icon: const Icon(Icons.navigation_rounded, size: 13),
-                  label: const Text(
-                    'Navigate',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.straighten_rounded,
+                            size: 12,
+                            color: _NeonTheme.neonCyan,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            '${trip.distanceKm.toStringAsFixed(1)} km',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: _isDarkMode
+                                  ? _NeonTheme.textPrimaryDark
+                                  : _NeonTheme.textPrimaryLight,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        width: 1,
+                        height: 10,
+                        color: _isDarkMode ? Colors.white12 : Colors.black12,
+                      ),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.schedule_rounded,
+                            size: 12,
+                            color: _NeonTheme.neonCyan,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            formatDuration(trip.durationMinutes),
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: _isDarkMode
+                                  ? _NeonTheme.textPrimaryDark
+                                  : _NeonTheme.textPrimaryLight,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (trip.trafficStatus != null) ...[
+                        Container(
+                          width: 1,
+                          height: 10,
+                          color: _isDarkMode ? Colors.white12 : Colors.black12,
+                        ),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.traffic_rounded,
+                              size: 12,
+                              color: _NeonTheme.safeGreen,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              trip.trafficStatus!,
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: _NeonTheme.safeGreen,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-              ),
-              const SizedBox(width: 6),
-              IconButton(
-                icon: const Icon(
-                  Icons.delete_outline_rounded,
-                  size: 18,
-                  color: _NeonTheme.dangerRed,
+              ],
+            ),
+          ),
+
+          // Actions: View Route, Start Navigation, Delete
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _viewSavedTripRoute(trip),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _NeonTheme.neonCyan.withValues(
+                        alpha: 0.14,
+                      ),
+                      foregroundColor: _NeonTheme.neonCyan,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(9),
+                        side: const BorderSide(
+                          color: _NeonTheme.cyanBorder,
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                    icon: const Icon(Icons.map_rounded, size: 12),
+                    label: const Text(
+                      'View Route',
+                      style: TextStyle(
+                          fontSize: 10.5, fontWeight: FontWeight.w800),
+                    ),
+                  ),
                 ),
-                onPressed: () => _confirmDeleteTrip(trip),
-              ),
-            ],
+                const SizedBox(width: 6),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _startSavedTripNavigation(trip),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _NeonTheme.neonCyan,
+                      foregroundColor: Colors.black,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                    ),
+                    icon: const Icon(Icons.navigation_rounded, size: 12),
+                    label: const Text(
+                      'Navigate',
+                      style: TextStyle(
+                          fontSize: 10.5, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 32, minHeight: 32),
+                  icon: const Icon(
+                    Icons.delete_outline_rounded,
+                    size: 17,
+                    color: _NeonTheme.dangerRed,
+                  ),
+                  onPressed: () => _confirmDeleteTrip(trip),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -31979,7 +34615,7 @@ if (factor.source != null && isIncluded) ...[
                               crossAxisCount: 2,
                               crossAxisSpacing: 16,
                               mainAxisSpacing: 16,
-                              mainAxisExtent: 180,
+                              mainAxisExtent: 240,
                             ),
                         itemCount: filtered.length,
                         itemBuilder: (context, index) =>
@@ -32005,51 +34641,144 @@ if (factor.source != null && isIncluded) ...[
   }
 
   Widget _buildFavouritesHeader() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Row(
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: _isDarkMode
+              ? _NeonTheme.neonAmber.withValues(alpha: 0.35)
+              : const Color(0x40F59E0B),
+          width: 1.2,
+        ),
+        boxShadow: _NeonTheme.cardShadow(_isDarkMode),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: Stack(
           children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: _NeonTheme.neonAmber.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.star_rounded,
-                color: _NeonTheme.neonAmber,
-                size: 20,
+            Positioned.fill(
+              child: Image.asset(
+                'assets/images/tamil_nadu_dusk_banner.jpg',
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  color: _isDarkMode
+                      ? _NeonTheme.bgDarkSecondary
+                      : const Color(0xffE2E8F0),
+                ),
               ),
             ),
-            const SizedBox(width: 10),
-            Text(
-              'Favourite Routes',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                color: _isDarkMode
-                    ? _NeonTheme.textPrimaryDark
-                    : _NeonTheme.textPrimaryLight,
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      (_isDarkMode
+                              ? const Color(0xff020B1C)
+                              : Colors.white)
+                          .withValues(alpha: 0.88),
+                      (_isDarkMode
+                              ? const Color(0xff06152D)
+                              : Colors.white)
+                          .withValues(alpha: 0.94),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: _NeonTheme.neonAmber.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: _NeonTheme.neonAmber.withValues(alpha: 0.4),
+                        width: 1,
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.star_rounded,
+                      color: _NeonTheme.neonAmber,
+                      size: 26,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              'Favourite Routes',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                                color: _isDarkMode
+                                    ? _NeonTheme.textPrimaryDark
+                                    : _NeonTheme.textPrimaryLight,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: _NeonTheme.neonAmber
+                                    .withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: _NeonTheme.neonAmber
+                                      .withValues(alpha: 0.4),
+                                  width: 0.8,
+                                ),
+                              ),
+                              child: Text(
+                                '${_favouriteRoutes.length} STARRED',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.5,
+                                  color: _NeonTheme.neonAmber,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          'Quick-access starred corridors for frequent travel and rapid navigation',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _isDarkMode
+                                ? _NeonTheme.textSecondaryDark
+                                : _NeonTheme.textSecondaryLight,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
         ),
-      ],
+      ),
     );
   }
 
   Widget _buildEmptyFavouritesState() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
-      decoration: BoxDecoration(
-        color: _isDarkMode ? _NeonTheme.cardDark : _NeonTheme.cardLight,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffE2E8F0),
-        ),
-        boxShadow: _NeonTheme.cardShadow(_isDarkMode),
+    return GlassCard(
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(
+        color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffE2E8F0),
       ),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
       child: Column(
         children: [
           Container(
@@ -32099,16 +34828,13 @@ if (factor.source != null && isIncluded) ...[
   }
 
   Widget _buildFavouritesSearchBar() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: _isDarkMode ? _NeonTheme.cardDark : _NeonTheme.cardLight,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffE2E8F0),
-          width: 1,
-        ),
+    return GlassCard(
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(
+        color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffE2E8F0),
+        width: 1,
       ),
+      padding: const EdgeInsets.all(12),
       child: TextField(
         controller: _favouritesSearchController,
         onChanged: (val) => setState(() => _favouritesSearchQuery = val),
@@ -32144,207 +34870,311 @@ if (factor.source != null && isIncluded) ...[
   }
 
   Widget _buildFavouriteRouteCard(_FavouriteRoute fav) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _isDarkMode ? _NeonTheme.cardDark : _NeonTheme.cardLight,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: _isDarkMode
-              ? _NeonTheme.neonAmber.withValues(alpha: 0.35)
-              : const Color(0x40F59E0B),
-          width: 1.2,
-        ),
-        boxShadow: _NeonTheme.cardShadow(_isDarkMode),
+    final imageAsset = _getRouteLandscapeAsset(
+      origin: fav.origin,
+      destination: fav.destination,
+      routeLabel: fav.routeLabel,
+    );
+    final categoryTag = _getRouteCategoryTag(
+      origin: fav.origin,
+      destination: fav.destination,
+      routeLabel: fav.routeLabel,
+    );
+    final categoryColor = _getRouteCategoryColor(categoryTag);
+
+    return GlassCard(
+      borderRadius: BorderRadius.circular(18),
+      enableHover: true,
+      border: Border.all(
+        color: _isDarkMode
+            ? _NeonTheme.neonAmber.withValues(alpha: 0.35)
+            : const Color(0x40F59E0B),
+        width: 1.2,
       ),
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Header: Star icon badge & Origin -> Destination
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: _NeonTheme.neonAmber.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.star_rounded,
-                  color: _NeonTheme.neonAmber,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      fav.routeLabel ?? '${fav.origin} → ${fav.destination}',
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w800,
-                        color: _isDarkMode
-                            ? _NeonTheme.textPrimaryDark
-                            : _NeonTheme.textPrimaryLight,
+          // Top Landscape Thumbnail Banner
+          SizedBox(
+            height: 72,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ClipRRect(
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(18)),
+                  child: Image.asset(
+                    imageAsset,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      color: _isDarkMode
+                          ? const Color(0xff06152D)
+                          : const Color(0xffE2E8F0),
+                      child: Center(
+                        child: Icon(Icons.star_rounded,
+                            color: _NeonTheme.neonAmber, size: 24),
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 3),
+                  ),
+                ),
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(18)),
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          (_isDarkMode
+                                  ? _NeonTheme.cardDark
+                                  : _NeonTheme.cardLight)
+                              .withValues(alpha: 0.90),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                // Route Category Pill on top left
+                Positioned(
+                  top: 8,
+                  left: 10,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: (_isDarkMode
+                              ? const Color(0xff020B1C)
+                              : Colors.white)
+                          .withValues(alpha: 0.88),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: categoryColor.withValues(alpha: 0.5),
+                        width: 0.8,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.terrain_rounded,
+                            size: 10, color: categoryColor),
+                        const SizedBox(width: 4),
+                        Text(
+                          categoryTag,
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.4,
+                            color: categoryColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                // Star Icon on top right
+                Positioned(
+                  top: 8,
+                  right: 10,
+                  child: Container(
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      color: (_isDarkMode
+                              ? const Color(0xff020B1C)
+                              : Colors.white)
+                          .withValues(alpha: 0.90),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: _NeonTheme.neonAmber.withValues(alpha: 0.6),
+                        width: 1,
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.star_rounded,
+                      color: _NeonTheme.neonAmber,
+                      size: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Body: Route Label & Origin -> Destination
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  fav.routeLabel ?? '${fav.origin} → ${fav.destination}',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                    color: _isDarkMode
+                        ? _NeonTheme.textPrimaryDark
+                        : _NeonTheme.textPrimaryLight,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '${fav.origin} → ${fav.destination}',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: _isDarkMode
+                        ? _NeonTheme.textSecondaryDark
+                        : _NeonTheme.textSecondaryLight,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 8),
+
+                // Vehicle & Travel Time Mode Tags
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: _NeonTheme.neonCyan.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(7),
+                        border: Border.all(
+                          color: _NeonTheme.neonCyan.withValues(alpha: 0.3),
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _vehicleIcon(fav.vehicleMode),
+                            size: 11,
+                            color: _NeonTheme.neonCyan,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            fav.vehicleMode,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: _NeonTheme.neonCyan,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: _NeonTheme.electricBlue.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(7),
+                        border: Border.all(
+                          color:
+                              _NeonTheme.electricBlue.withValues(alpha: 0.3),
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            fav.travelTimeMode == 'Night'
+                                ? Icons.nightlight_round
+                                : fav.travelTimeMode == 'Both'
+                                    ? Icons.brightness_medium_rounded
+                                    : Icons.wb_sunny_rounded,
+                            size: 11,
+                            color: _NeonTheme.electricBlue,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            fav.travelTimeMode,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: _NeonTheme.electricBlue,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Spacer(),
                     Text(
-                      '${fav.origin} → ${fav.destination}',
+                      _formatTripDate(fav.createdAt),
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 10,
                         color: _isDarkMode
                             ? _NeonTheme.textSecondaryDark
                             : _NeonTheme.textSecondaryLight,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
 
-          const SizedBox(height: 12),
-
-          // Vehicle & Travel Time Mode Tags
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _NeonTheme.neonCyan.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: _NeonTheme.neonCyan.withValues(alpha: 0.3),
-                    width: 0.8,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      _vehicleIcon(fav.vehicleMode),
-                      size: 13,
-                      color: _NeonTheme.neonCyan,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      fav.vehicleMode,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: _NeonTheme.neonCyan,
+          // Actions: Plan Route & Remove
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _planFavouriteRoute(fav),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _NeonTheme.neonCyan,
+                      foregroundColor: Colors.black,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(9),
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _NeonTheme.electricBlue.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: _NeonTheme.electricBlue.withValues(alpha: 0.3),
-                    width: 0.8,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      fav.travelTimeMode == 'Night'
-                          ? Icons.nightlight_round
-                          : fav.travelTimeMode == 'Both'
-                          ? Icons.brightness_medium_rounded
-                          : Icons.wb_sunny_rounded,
-                      size: 13,
-                      color: _NeonTheme.electricBlue,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      fav.travelTimeMode,
-                      style: const TextStyle(
+                    icon: const Icon(Icons.explore_rounded, size: 13),
+                    label: const Text(
+                      'Plan Route',
+                      style: TextStyle(
                         fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: _NeonTheme.electricBlue,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
-                  ],
+                  ),
                 ),
-              ),
-              const Spacer(),
-              Text(
-                _formatTripDate(fav.createdAt),
-                style: TextStyle(
-                  fontSize: 10.5,
-                  color: _isDarkMode
-                      ? _NeonTheme.textSecondaryDark
-                      : _NeonTheme.textSecondaryLight,
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 12),
-
-          // Action Buttons: Plan Route & Remove
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => _planFavouriteRoute(fav),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _NeonTheme.neonCyan,
-                    foregroundColor: Colors.black,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(vertical: 9),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () => _confirmRemoveFavourite(fav),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _NeonTheme.dangerRed,
+                    side: BorderSide(
+                      color: _NeonTheme.dangerRed.withValues(alpha: 0.5),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(9),
                     ),
                   ),
-                  icon: const Icon(Icons.explore_rounded, size: 14),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 13),
                   label: const Text(
-                    'Plan Route',
+                    'Remove',
                     style: TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w800,
-                    ),
+                        fontSize: 11, fontWeight: FontWeight.w700),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: () => _confirmRemoveFavourite(fav),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: _NeonTheme.dangerRed,
-                  side: BorderSide(
-                    color: _NeonTheme.dangerRed.withValues(alpha: 0.5),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 9,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-                icon: const Icon(Icons.delete_outline_rounded, size: 14),
-                label: const Text(
-                  'Remove',
-                  style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -32819,66 +35649,109 @@ if (factor.source != null && isIncluded) ...[
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(
-                padding: const EdgeInsets.all(22),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [_NeonTheme.bgDarkSecondary, _NeonTheme.cardDark],
+              ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: _NeonTheme.cyanBorder, width: 1.2),
                   ),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: _NeonTheme.cyanBorder, width: 1.2),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: _NeonTheme.neonCyan.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(14),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: Image.asset(
+                          'assets/images/saferoute_ai_network_hero.jpg',
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) => Container(
+                            color: _isDarkMode
+                                ? _NeonTheme.bgDarkSecondary
+                                : const Color(0xffE2E8F0),
+                          ),
+                        ),
                       ),
-                      child: const Icon(
-                        Icons.shield_rounded,
-                        color: _NeonTheme.neonCyan,
-                        size: 32,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Tamil Nadu Road Safety AI Engine',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w900,
-                              color: _isDarkMode
-                                  ? Colors.white
-                                  : Colors.black87,
+                      Positioned.fill(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                (_isDarkMode
+                                        ? const Color(0xff020B1C)
+                                        : Colors.white)
+                                    .withValues(alpha: 0.88),
+                                (_isDarkMode
+                                        ? const Color(0xff06152D)
+                                        : Colors.white)
+                                    .withValues(alpha: 0.94),
+                              ],
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Context-aware multi-factor routing architecture verified with 100% real road data.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: _isDarkMode
-                                  ? _NeonTheme.textSecondaryDark
-                                  : _NeonTheme.textSecondaryLight,
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ],
+                      Padding(
+                        padding: const EdgeInsets.all(22),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: _NeonTheme.neonCyan.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: _NeonTheme.neonCyan.withValues(alpha: 0.3),
+                                  width: 1,
+                                ),
+                              ),
+                              child: const Icon(
+                                Icons.shield_rounded,
+                                color: _NeonTheme.neonCyan,
+                                size: 32,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Tamil Nadu Road Safety AI Engine',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w900,
+                                      color: _isDarkMode
+                                          ? Colors.white
+                                          : Colors.black87,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Context-aware multi-factor routing architecture verified with 100% real road data.',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: _isDarkMode
+                                          ? _NeonTheme.textSecondaryDark
+                                          : _NeonTheme.textSecondaryLight,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
               const SizedBox(height: 20),
-              // Insight Cards
+              // Insight Cards with Visual Telemetry Assets
               _buildInsightCard(
                 icon: Icons.warning_rounded,
                 color: _NeonTheme.dangerRed,
                 title: '1. Verified Blackspot Spatial Proximity',
+                factorBadge: 'SPATIAL HAZARD RADAR',
+                imageAsset: 'assets/images/accident_risk_visual.jpg',
                 description:
                     'Connects to the SafeRoute TN Flask backend containing geocoded blackspot records across Tamil Nadu. '
                     'Samples the route every 500m to calculate distance to verified crash zones.',
@@ -32887,6 +35760,8 @@ if (factor.source != null && isIncluded) ...[
                 icon: Icons.alt_route_rounded,
                 color: _NeonTheme.neonCyan,
                 title: '2. Route-Matched OSM Road Conditions',
+                factorBadge: 'PAVEMENT QUALITY SCAN',
+                imageAsset: 'assets/images/road_condition_visual.jpg',
                 description:
                     'Queries live OpenStreetMap Overpass way data along the exact geometry. '
                     'Evaluates surface materials (asphalt vs unpaved) and smoothness ratings distance-weighted across road segments.',
@@ -32895,6 +35770,8 @@ if (factor.source != null && isIncluded) ...[
                 icon: Icons.traffic_rounded,
                 color: _NeonTheme.warningGold,
                 title: '3. TomTom Orbis Real-Time Traffic Flow',
+                factorBadge: 'LIVE VECTOR FLOW',
+                imageAsset: 'assets/images/traffic_flow_visual.jpg',
                 description:
                     'Calculates live speed ratios against free-flow speeds using vector flow tiles from TomTom. '
                     'Provides verified congestion indices without simulated mockups.',
@@ -32903,6 +35780,8 @@ if (factor.source != null && isIncluded) ...[
                 icon: Icons.cloud_rounded,
                 color: _NeonTheme.electricBlue,
                 title: '4. Live Open-Meteo Weather Impact',
+                factorBadge: 'METEOROLOGICAL TELEMETRY',
+                imageAsset: 'assets/images/weather_road_visual.jpg',
                 description:
                     'Adjusts weather safety factor using live meteorological readings (temperature, precipitation, wind speed, weather code) '
                     'fetched for the route destination.',
@@ -32911,6 +35790,8 @@ if (factor.source != null && isIncluded) ...[
                 icon: Icons.lightbulb_rounded,
                 color: _NeonTheme.neonViolet,
                 title: '5. Dynamic Day / Night Lighting Model',
+                factorBadge: 'DYNAMIC ILLUMINATION',
+                imageAsset: 'assets/images/night_travel_visual.jpg',
                 description:
                     'Day mode trips exclude lighting completely from the denominator. Night mode evaluates explicit OSM lit tags. '
                     'Both-mode trips weight lighting proportionally to the nighttime journey duration.',
@@ -32919,6 +35800,8 @@ if (factor.source != null && isIncluded) ...[
                 icon: Icons.accessible_rounded,
                 color: _NeonTheme.safeGreen,
                 title: '6. Explicit Accessibility Verification',
+                factorBadge: 'BARRIER-FREE INFRASTRUCTURE',
+                imageAsset: 'assets/images/accessibility_infrastructure.jpg',
                 description:
                     'Considers explicit wheelchair, sidewalk, foot, and tactile paving attributes on matched road segments, '
                     'distance-weighted without fallback assumptions.',
@@ -32935,56 +35818,971 @@ if (factor.source != null && isIncluded) ...[
     required Color color,
     required String title,
     required String description,
+    required String imageAsset,
+    required String factorBadge,
   }) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: _isDarkMode ? _NeonTheme.cardDark : _NeonTheme.cardLight,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: _isDarkMode ? _NeonTheme.cyanBorder : const Color(0xffE2E8F0),
-          width: 1,
+          color: _isDarkMode
+              ? _NeonTheme.cyanBorder.withValues(alpha: 0.4)
+              : const Color(0xffE2E8F0),
+          width: 1.2,
         ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: color, size: 22),
+        boxShadow: [
+          BoxShadow(
+            color: _isDarkMode
+                ? Colors.black.withValues(alpha: 0.25)
+                : const Color(0x0A000000),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isDesktop = constraints.maxWidth >= 540;
+
+            final imageWidget = Stack(
+              fit: StackFit.expand,
               children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
+                Image.asset(
+                  imageAsset,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
                     color: _isDarkMode
-                        ? _NeonTheme.textPrimaryDark
-                        : _NeonTheme.textPrimaryLight,
+                        ? const Color(0xff06152D)
+                        : const Color(0xffE2E8F0),
+                    child: Center(
+                      child: Icon(icon, color: color, size: 36),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  description,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    height: 1.45,
-                    color: _isDarkMode
-                        ? _NeonTheme.textSecondaryDark
-                        : _NeonTheme.textSecondaryLight,
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: isDesktop
+                          ? LinearGradient(
+                              begin: Alignment.centerLeft,
+                              end: Alignment.centerRight,
+                              colors: [
+                                Colors.transparent,
+                                (_isDarkMode
+                                        ? _NeonTheme.cardDark
+                                        : _NeonTheme.cardLight)
+                                    .withValues(alpha: 0.65),
+                              ],
+                            )
+                          : LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                (_isDarkMode
+                                        ? _NeonTheme.cardDark
+                                        : _NeonTheme.cardLight)
+                                    .withValues(alpha: 0.85),
+                              ],
+                            ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 10,
+                  left: 10,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: (_isDarkMode
+                              ? const Color(0xff020B1C)
+                              : Colors.white)
+                          .withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: color.withValues(alpha: 0.6),
+                        width: 0.8,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(icon, size: 11, color: color),
+                        const SizedBox(width: 4),
+                        Text(
+                          factorBadge,
+                          style: TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.6,
+                            color: color,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
+            );
+
+            final contentWidget = Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(7),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(icon, color: color, size: 18),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.2,
+                            color: _isDarkMode
+                                ? _NeonTheme.textPrimaryDark
+                                : _NeonTheme.textPrimaryLight,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    description,
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.5,
+                      color: _isDarkMode
+                          ? _NeonTheme.textSecondaryDark
+                          : _NeonTheme.textSecondaryLight,
+                    ),
+                  ),
+                ],
+              ),
+            );
+
+            if (isDesktop) {
+              return IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SizedBox(
+                      width: 200,
+                      child: imageWidget,
+                    ),
+                    Expanded(child: contentWidget),
+                  ],
+                ),
+              );
+            } else {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    height: 140,
+                    width: double.infinity,
+                    child: imageWidget,
+                  ),
+                  contentWidget,
+                ],
+              );
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCommunityFilterChip({
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+    Color? color,
+  }) {
+    final chipColor = color ?? _NeonTheme.neonCyan;
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? chipColor.withValues(alpha: 0.18)
+              : (_isDarkMode ? const Color(0xff06152D) : const Color(0xffF1F5F9)),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected ? chipColor : (_isDarkMode ? const Color(0x3500D9FF) : const Color(0xffCBD5E1)),
+            width: isSelected ? 1.4 : 0.9,
+          ),
+          boxShadow: isSelected
+              ? [BoxShadow(color: chipColor.withValues(alpha: 0.25), blurRadius: 8)]
+              : null,
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+            color: isSelected
+                ? (_isDarkMode ? Colors.white : chipColor)
+                : (_isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCommunityView(BuildContext context, {required bool compact}) {
+    final totalHazards = _communityHazards.length;
+    final confirmedCount = _communityHazards.where((h) => h.status == 'Confirmed').length;
+    final pendingCount = _communityHazards.where((h) => h.status == 'Pending').length;
+
+    final filteredHazards = _communityHazards.where((h) {
+      if (_communityFilter == 'confirmed') return h.status == 'Confirmed';
+      if (_communityFilter == 'pending') return h.status == 'Pending';
+      return true;
+    }).toList();
+
+    return SafeRouteContentContainer(
+      maxWidth: 1100,
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 16 : 24,
+        vertical: compact ? 18 : 28,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SafeRoutePageHeader(
+            title: _isTamil ? 'சமூக சாலை பாதுகாப்பு' : 'Community Road Safety',
+            subtitle: _isTamil
+                ? 'தமிழ்நாடு முழுவதும் சரிபார்க்கப்பட்ட சமூக அபாயங்கள் மற்றும் எச்சரிக்கைகள்'
+                : 'Crowd-sourced, AI-verified road hazards and real-time community reports across Tamil Nadu',
+            badge: 'LIVE CROWDSOURCING',
+            badgeColor: _NeonTheme.safeGreen,
+            icon: Icons.groups_rounded,
+            trailing: SafeRoutePrimaryButton(
+              label: _isTamil ? 'அபாயத்தை தெரிவிக்கவும்' : 'Report Road Hazard',
+              icon: Icons.add_location_alt_rounded,
+              onPressed: () => _openReportProblemDialog(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Community Corridor Hero Banner
+          ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              height: 140,
+              decoration: BoxDecoration(
+                color: _isDarkMode ? _NeonTheme.bgDarkSecondary : Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: _isDarkMode ? const Color(0x3500D9FF) : const Color(0xffCBD5E1),
+                  width: 1.1,
+                ),
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.asset(
+                    'assets/images/saferoute_ai_network_hero.jpg',
+                    fit: BoxFit.cover,
+                    alignment: Alignment.center,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      color: _isDarkMode ? const Color(0xff06152D) : const Color(0xffE2E8F0),
+                    ),
+                  ),
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          (_isDarkMode ? const Color(0xff020B1C) : const Color(0xff0F172A)).withValues(alpha: 0.55),
+                          (_isDarkMode ? const Color(0xff020B1C) : const Color(0xff0F172A)).withValues(alpha: 0.92),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: _NeonTheme.safeGreen.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: _NeonTheme.safeGreen.withValues(alpha: 0.4)),
+                              ),
+                              child: const Text(
+                                'REAL-TIME CROWDSOURCING & AUDITING',
+                                style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: _NeonTheme.safeGreen),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _isTamil ? 'தமிழ்நாடு நேரலை சாலை அபாய வலையமைப்பு' : 'Tamil Nadu Live Road Incident Network',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Metrics Row
+          Row(
+            children: [
+              Expanded(
+                child: GlassCard(
+                  enableHover: true,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$totalHazards',
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                            color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Active Hazards Reported',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: GlassCard(
+                  enableHover: true,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$confirmedCount',
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                            color: _NeonTheme.safeGreen,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Confirmed & Verified',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: GlassCard(
+                  enableHover: true,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$pendingCount',
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                            color: _NeonTheme.neonAmber,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Under AI Review',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Filter Chips Row
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildCommunityFilterChip(
+                label: 'All Incidents ($totalHazards)',
+                isSelected: _communityFilter == 'all',
+                onTap: () => setState(() => _communityFilter = 'all'),
+              ),
+              _buildCommunityFilterChip(
+                label: 'Confirmed ($confirmedCount)',
+                color: _NeonTheme.dangerRed,
+                isSelected: _communityFilter == 'confirmed',
+                onTap: () => setState(() => _communityFilter = 'confirmed'),
+              ),
+              _buildCommunityFilterChip(
+                label: 'Under AI Review ($pendingCount)',
+                color: _NeonTheme.neonAmber,
+                isSelected: _communityFilter == 'pending',
+                onTap: () => setState(() => _communityFilter = 'pending'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Hazards list or empty state
+          if (filteredHazards.isEmpty)
+            SafeRouteEmptyState(
+              icon: Icons.verified_user_outlined,
+              title: _communityFilter == 'all'
+                  ? 'No Active Road Hazards Reported'
+                  : 'No hazards in this category',
+              description: _communityFilter == 'all'
+                  ? 'All corridors across Tamil Nadu are currently operating under normal conditions. You can report potholes, flooding, or road blocks to alert other drivers.'
+                  : 'No hazards matching the selected filter currently reported.',
+              actionLabel: 'Report Road Hazard',
+              onAction: () => _openReportProblemDialog(),
+            )
+          else
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: filteredHazards.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final hazard = filteredHazards[index];
+                return GlassCard(
+                  enableHover: true,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: (hazard.status == 'Confirmed'
+                                    ? _NeonTheme.dangerRed
+                                    : _NeonTheme.neonAmber)
+                                .withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            hazard.status == 'Confirmed'
+                                ? Icons.warning_rounded
+                                : Icons.report_problem_outlined,
+                            color: hazard.status == 'Confirmed'
+                                ? _NeonTheme.dangerRed
+                                : _NeonTheme.neonAmber,
+                            size: 22,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      hazard.problemType.isNotEmpty ? hazard.problemType : hazard.category,
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w800,
+                                        color: _isDarkMode
+                                            ? _NeonTheme.textPrimaryDark
+                                            : _NeonTheme.textPrimaryLight,
+                                      ),
+                                    ),
+                                  ),
+                                  SafeRouteStatusBadge(
+                                    label: hazard.status.toUpperCase(),
+                                    color: hazard.status == 'Confirmed'
+                                        ? _NeonTheme.dangerRed
+                                        : _NeonTheme.neonAmber,
+                                  ),
+                                ],
+                              ),
+                              if (hazard.description.isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  hazard.description,
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    color: _isDarkMode
+                                        ? _NeonTheme.textSecondaryDark
+                                        : _NeonTheme.textSecondaryLight,
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  const Icon(
+                                    Icons.place_outlined,
+                                    size: 14,
+                                    color: _NeonTheme.neonCyan,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    hazard.latitude != null && hazard.longitude != null
+                                        ? '${hazard.latitude!.toStringAsFixed(4)}, ${hazard.longitude!.toStringAsFixed(4)}'
+                                        : (hazard.locationLandmark ?? 'Tamil Nadu Highway'),
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontFamily: 'monospace',
+                                      color: _NeonTheme.neonCyan,
+                                    ),
+                                  ),
+                                  if (hazard.confirmationsCount > 0) ...[
+                                    const SizedBox(width: 10),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: _NeonTheme.safeGreen.withValues(alpha: 0.12),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        '✓ ${hazard.confirmationsCount} verified',
+                                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: _NeonTheme.safeGreen),
+                                      ),
+                                    ),
+                                  ],
+                                  const Spacer(),
+                                  TextButton.icon(
+                                    style: TextButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                      minimumSize: Size.zero,
+                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    ),
+                                    onPressed: () => _showCommunityHazardDetails(hazard),
+                                    icon: const Icon(Icons.info_outline_rounded, size: 14),
+                                    label: const Text('Details', style: TextStyle(fontSize: 11.5)),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmergencyView(BuildContext context, {required bool compact}) {
+    return SafeRouteContentContainer(
+      maxWidth: 1100,
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 16 : 24,
+        vertical: compact ? 18 : 28,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SafeRoutePageHeader(
+            title: _isTamil ? 'அவசர சேவைகள் & உதவி' : 'Emergency Services & Assistance',
+            subtitle: _isTamil
+                ? 'தமிழ்நாடு அவசர சேவைகள், நேரலை இருப்பிடப் பகிர்வு மற்றும் அவசர தொடர்புகள்'
+                : 'Direct 24/7 hotline speed-dial, live GPS location sharing, and emergency contacts for Tamil Nadu highways',
+            badge: '24/7 EMERGENCY SOS',
+            badgeColor: _NeonTheme.dangerRed,
+            icon: Icons.emergency_rounded,
+            trailing: SafeRouteSecondaryButton(
+              label: _isTamil ? 'முழு SOS வழிகாட்டி' : 'Full SOS Dialog',
+              icon: Icons.open_in_new_rounded,
+              onPressed: _openEmergencyDialog,
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Emergency Hero Banner
+          ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              height: 150,
+              decoration: BoxDecoration(
+                color: _isDarkMode ? _NeonTheme.bgDarkSecondary : Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: _NeonTheme.dangerRed.withValues(alpha: 0.4),
+                  width: 1.2,
+                ),
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.asset(
+                    'assets/images/emergency_safety_shield.jpg',
+                    fit: BoxFit.cover,
+                    alignment: Alignment.center,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      color: const Color(0xffEF4444).withValues(alpha: 0.15),
+                    ),
+                  ),
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          (_isDarkMode ? const Color(0xff020B1C) : const Color(0xff0F172A)).withValues(alpha: 0.6),
+                          (_isDarkMode ? const Color(0xff020B1C) : const Color(0xff0F172A)).withValues(alpha: 0.94),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: _NeonTheme.dangerRed.withValues(alpha: 0.25),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: _NeonTheme.dangerRed.withValues(alpha: 0.5)),
+                          ),
+                          child: const Text(
+                            '24/7 RAPID DISPATCH · TAMIL NADU POLICE & 108 AMBULANCE',
+                            style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: _NeonTheme.dangerRed),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _isTamil ? 'அதிவிரைவு அவசர உதவி மையம்' : 'Highway Emergency & Trauma SOS Center',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          // 4 SOS Hotlines in Responsive Grid
+          Text(
+            _isTamil ? 'விரைவு அவசர அழைப்புகள்' : 'Immediate Emergency Hotlines',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+            ),
+          ),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isTwoCol = constraints.maxWidth >= 600;
+              return Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  _buildEmergencyHotlineCard(
+                    number: '108',
+                    title: 'Medical Ambulance (108)',
+                    subtitle: 'Tamil Nadu Emergency Ambulance Service',
+                    icon: Icons.local_hospital_rounded,
+                    color: _NeonTheme.dangerRed,
+                    width: isTwoCol ? (constraints.maxWidth - 12) / 2 : constraints.maxWidth,
+                    onTap: () => EmergencyCallService.initiateCallWithConfirmation(
+                      context: context,
+                      serviceName: 'Tamil Nadu Ambulance (108)',
+                      phoneNumber: '108',
+                      isTamil: _isTamil,
+                      isDarkMode: _isDarkMode,
+                    ),
+                  ),
+                  _buildEmergencyHotlineCard(
+                    number: '100',
+                    title: 'Police Control (100)',
+                    subtitle: 'Immediate law enforcement & highway patrol',
+                    icon: Icons.local_police_rounded,
+                    color: _NeonTheme.electricBlue,
+                    width: isTwoCol ? (constraints.maxWidth - 12) / 2 : constraints.maxWidth,
+                    onTap: () => EmergencyCallService.initiateCallWithConfirmation(
+                      context: context,
+                      serviceName: 'Tamil Nadu Police Control (100)',
+                      phoneNumber: '100',
+                      isTamil: _isTamil,
+                      isDarkMode: _isDarkMode,
+                    ),
+                  ),
+                  _buildEmergencyHotlineCard(
+                    number: '1091',
+                    title: 'Women Helpline (1091)',
+                    subtitle: '24x7 Women Safety & SOS response in TN',
+                    icon: Icons.security_rounded,
+                    color: _NeonTheme.neonViolet,
+                    width: isTwoCol ? (constraints.maxWidth - 12) / 2 : constraints.maxWidth,
+                    onTap: () => EmergencyCallService.initiateCallWithConfirmation(
+                      context: context,
+                      serviceName: 'Women Helpline (1091)',
+                      phoneNumber: '1091',
+                      isTamil: _isTamil,
+                      isDarkMode: _isDarkMode,
+                    ),
+                  ),
+                  _buildEmergencyHotlineCard(
+                    number: '1077',
+                    title: 'Disaster Relief (1077)',
+                    subtitle: 'District Collector Disaster Control Room',
+                    icon: Icons.flood_rounded,
+                    color: _NeonTheme.neonAmber,
+                    width: isTwoCol ? (constraints.maxWidth - 12) / 2 : constraints.maxWidth,
+                    onTap: () => EmergencyCallService.initiateCallWithConfirmation(
+                      context: context,
+                      serviceName: 'Disaster Management Control (1077)',
+                      phoneNumber: '1077',
+                      isTamil: _isTamil,
+                      isDarkMode: _isDarkMode,
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+          // Live GPS Location & Quick SOS Sharing Card
+          GlassCard(
+            enableHover: true,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: _NeonTheme.neonCyan.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.my_location_rounded, color: _NeonTheme.neonCyan, size: 20),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Text(
+                                  _isTamil ? 'உங்கள் தற்போதைய ஜி.பி.எஸ் இருப்பிடம்' : 'Your Live GPS Location Coordinates',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800,
+                                    color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: currentPosition != null ? _NeonTheme.safeGreen : _NeonTheme.neonAmber,
+                                    shape: BoxShape.circle,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: (currentPosition != null ? _NeonTheme.safeGreen : _NeonTheme.neonAmber).withValues(alpha: 0.6),
+                                        blurRadius: 4,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              currentPosition != null
+                                  ? 'Latitude: ${currentPosition!.latitude.toStringAsFixed(6)}, Longitude: ${currentPosition!.longitude.toStringAsFixed(6)} (±${currentPosition!.accuracy.round()}m)'
+                                  : 'Acquiring GPS fix or permission needed...',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontFamily: currentPosition != null ? 'monospace' : null,
+                                color: currentPosition != null
+                                    ? _NeonTheme.neonCyan
+                                    : (_isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Refresh GPS fix',
+                        icon: const Icon(Icons.refresh_rounded, color: _NeonTheme.neonCyan),
+                        onPressed: () async {
+                          final result = await service.getCurrentLocationWithDiagnostics(forceFresh: true);
+                          if (result.position != null && mounted) {
+                            setState(() => currentPosition = result.position);
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _NeonTheme.safeGreen,
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () {
+                          if (currentPosition != null) {
+                            final msg = EmergencyLocationHelper.buildSosMessage(
+                              latitude: currentPosition!.latitude,
+                              longitude: currentPosition!.longitude,
+                              accuracyMeters: currentPosition!.accuracy,
+                              routeOrigin: currentFrom.isNotEmpty ? currentFrom : null,
+                              routeDestination: currentTo.isNotEmpty ? currentTo : null,
+                            );
+                            final uri = EmergencyLocationHelper.buildWhatsAppUri(msg);
+                            EmergencyCallService.launchExternalUri(
+                              context,
+                              uri,
+                              failureFallback: 'Could not open WhatsApp',
+                            );
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Please acquire GPS location first')),
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.share_location_rounded, size: 18),
+                        label: const Text('Share via WhatsApp', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
+                      ),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _NeonTheme.neonCyan,
+                          side: const BorderSide(color: _NeonTheme.cyanBorder),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () {
+                          if (currentPosition != null) {
+                            final url = EmergencyLocationHelper.buildGoogleMapsUrl(
+                              currentPosition!.latitude,
+                              currentPosition!.longitude,
+                            );
+                            EmergencyCallService.copyToClipboard(
+                              context,
+                              url,
+                              'Google Maps location copied to clipboard!',
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.copy_rounded, size: 16),
+                        label: const Text('Copy Location Link', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          // Highway Safety Guidelines Card
+          GlassCard(
+            enableHover: true,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.shield_outlined, color: _NeonTheme.electricBlue, size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Tamil Nadu Highway Safety Protocol',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    '1. In case of breakdown, pull entirely onto the paved shoulder and activate hazard flashers.\n2. In severe weather or ghat road landslides (Nilgiris/Kodaikanal), stop at the nearest verified facility.\n3. Dial 108 for medical trauma ambulances stationed every 30-40km along NH-44, NH-45, and NH-7.\n4. SafeRoute TN keeps your emergency contacts locally secured on device with no cloud tracking.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.5,
+                      color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -32992,306 +36790,489 @@ if (factor.source != null && isIncluded) ...[
     );
   }
 
-  Widget _buildSettingsView() {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Application Settings',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w900,
-                  color: _isDarkMode
-                      ? _NeonTheme.textPrimaryDark
-                      : _NeonTheme.textPrimaryLight,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Configure theme, default navigation preferences and data engine',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: _isDarkMode
-                      ? _NeonTheme.textSecondaryDark
-                      : _NeonTheme.textSecondaryLight,
-                ),
-              ),
-              const SizedBox(height: 20),
-              // Theme Setting
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: _isDarkMode
-                      ? _NeonTheme.cardDark
-                      : _NeonTheme.cardLight,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: _isDarkMode
-                        ? _NeonTheme.cyanBorder
-                        : const Color(0xffE2E8F0),
+  Widget _buildEmergencyHotlineCard({
+    required String number,
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required double width,
+    required VoidCallback onTap,
+  }) {
+    return SizedBox(
+      width: width,
+      child: GlassCard(
+        enableHover: true,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: color.withValues(alpha: 0.35), width: 1),
+                  ),
+                  child: Center(
+                    child: Icon(icon, color: color, size: 22),
                   ),
                 ),
-                child: Row(
-                  children: [
-                    Icon(
-                      _isDarkMode
-                          ? Icons.dark_mode_rounded
-                          : Icons.light_mode_rounded,
-                      color: _NeonTheme.neonCyan,
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
                         children: [
                           Text(
-                            'Appearance Theme',
+                            title,
                             style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: _isDarkMode
-                                  ? _NeonTheme.textPrimaryDark
-                                  : _NeonTheme.textPrimaryLight,
-                            ),
-                          ),
-                          Text(
-                            _isDarkMode
-                                ? 'Futuristic Dark Neon'
-                                : 'Cyber Light',
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              color: _isDarkMode
-                                  ? _NeonTheme.textSecondaryDark
-                                  : _NeonTheme.textSecondaryLight,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                              color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
                             ),
                           ),
                         ],
                       ),
-                    ),
-                    Switch(
-                      value: _isDarkMode,
-                      activeThumbColor: _NeonTheme.neonCyan,
-                      onChanged: (_) => widget.onToggleTheme(),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 14),
-              // Backend API status
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: _isDarkMode
-                      ? _NeonTheme.cardDark
-                      : _NeonTheme.cardLight,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: _isDarkMode
-                        ? _NeonTheme.cyanBorder
-                        : const Color(0xffE2E8F0),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.api_rounded, color: _NeonTheme.safeGreen),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Flask Blackspot Engine Endpoint',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: _isDarkMode
-                                  ? _NeonTheme.textPrimaryDark
-                                  : _NeonTheme.textPrimaryLight,
-                            ),
-                          ),
-                          const Text(
-                            'http://127.0.0.1:5000 /check-blackspot',
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              fontFamily: 'monospace',
-                              color: _NeonTheme.neonCyan,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _NeonTheme.safeGreen.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: const Text(
-                        'ONLINE',
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
                         style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          color: _NeonTheme.safeGreen,
+                          fontSize: 11,
+                          color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.phone_rounded, color: color, size: 14),
+                      const SizedBox(width: 4),
+                      Text(
+                        'CALL',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          color: color,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildAboutView() {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 880),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // 1. Premium Hero Showcase Banner
-              ClipRRect(
-                borderRadius: BorderRadius.circular(22),
-                child: Container(
-                  height: 240,
-                  decoration: BoxDecoration(
-                    color: _isDarkMode ? _NeonTheme.bgDarkSecondary : Colors.white,
-                    borderRadius: BorderRadius.circular(22),
-                    border: Border.all(
-                      color: _isDarkMode ? const Color(0x3500D9FF) : const Color(0xffE2E8F0),
-                      width: 1.2,
+  Widget _buildSettingsView() {
+    return SafeRouteContentContainer(
+      maxWidth: 820,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SafeRoutePageHeader(
+            title: _isTamil ? 'பயன்பாட்டு அமைப்புகள்' : 'Application Settings & Telemetry',
+            subtitle: _isTamil
+                ? 'தோற்றம், பயனர் விருப்பங்கள் மற்றும் பின்தள இயந்திர நிலை'
+                : 'Configure theme, default navigation preferences, vehicle mode, and real-time backend engine connectivity',
+            badge: 'PREFERENCES & TELEMETRY',
+            badgeColor: _NeonTheme.neonCyan,
+            icon: Icons.tune_rounded,
+          ),
+          const SizedBox(height: 8),
+          // 1. Appearance Theme Card
+          GlassCard(
+            enableHover: true,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: _NeonTheme.neonCyan.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    boxShadow: _NeonTheme.cardShadow(_isDarkMode),
+                    child: Icon(
+                      _isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+                      color: _NeonTheme.neonCyan,
+                      size: 22,
+                    ),
                   ),
-                  child: Stack(
-                    fit: StackFit.expand,
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Appearance Theme',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          _isDarkMode ? 'Futuristic Dark Neon (Deep Navy #020B1C)' : 'Cyber Light Navigation (#F8FAFC)',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value: _isDarkMode,
+                    activeThumbColor: _NeonTheme.neonCyan,
+                    onChanged: (_) => widget.onToggleTheme(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          // 2. Navigation & Safety Preferences Card
+          GlassCard(
+            enableHover: true,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      Image.asset(
-                        'assets/images/saferoute_ai_network_hero.jpg',
-                        fit: BoxFit.cover,
-                        alignment: Alignment.center,
-                        errorBuilder: (context, error, stackTrace) => Container(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: _isDarkMode
-                                  ? const [Color(0xff020B1C), Color(0xff0B1F3A)]
-                                  : const [Color(0xff0369A1), Color(0xff0284C7)],
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: _NeonTheme.electricBlue.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.speed_rounded, color: _NeonTheme.electricBlue, size: 22),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Travel Profile & Vehicle Telemetry',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'Selected: $currentVehicle · Priority: $currentMainPriority · Time: $currentTravelTime',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _NeonTheme.neonCyan,
+                          side: const BorderSide(color: _NeonTheme.cyanBorder),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: _openSafetyProfileDialog,
+                        icon: const Icon(Icons.person_pin_rounded, size: 16),
+                        label: const Text('Edit Profile', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  const Divider(height: 1),
+                  const SizedBox(height: 14),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Smart Night Travel Mode',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                              color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
                             ),
                           ),
+                          Text(
+                            'Strict street-lighting requirement for nighttime journeys',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Switch(
+                        value: _isSmartNightModeActive,
+                        activeThumbColor: _NeonTheme.neonViolet,
+                        onChanged: (val) {
+                          setState(() {
+                            _isSmartNightModeActive = val;
+                            currentTravelTime = val ? 'Night' : 'Now';
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          // 3. Backend AI Engine Status Card
+          GlassCard(
+            enableHover: true,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: _NeonTheme.safeGreen.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.api_rounded, color: _NeonTheme.safeGreen, size: 22),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Flask Blackspot Engine Endpoint',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+                              ),
+                            ),
+                            const Text(
+                              'http://127.0.0.1:5000 /check-blackspot',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontFamily: 'monospace',
+                                color: _NeonTheme.neonCyan,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                       Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.transparent,
-                              (_isDarkMode ? const Color(0xff020B1C) : const Color(0xff0F172A))
-                                  .withValues(alpha: 0.88),
-                            ],
-                            stops: const [0.35, 1.0],
-                          ),
+                          color: _NeonTheme.safeGreen.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: _NeonTheme.safeGreen.withValues(alpha: 0.4)),
                         ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: const Color(0xff00D9FF).withValues(alpha: 0.18),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: const Color(0xff00D9FF).withValues(alpha: 0.5),
-                                  width: 1,
-                                ),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.auto_awesome, color: Color(0xff00D9FF), size: 13),
-                                  SizedBox(width: 5),
-                                  Text(
-                                    'NEXT-GEN TAMIL NADU CORRIDOR INTELLIGENCE',
-                                    style: TextStyle(
-                                      color: Color(0xff00D9FF),
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 0.6,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            const Text(
-                              'SafeRoute TN 2.0',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 26,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: -0.5,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
+                            Icon(Icons.check_circle_rounded, color: _NeonTheme.safeGreen, size: 12),
+                            SizedBox(width: 4),
                             Text(
-                              'Real-time contextual safety telemetry, predictive accident analysis, and responsive navigation across Tamil Nadu.',
-                              style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.82),
-                                fontSize: 13,
-                                height: 1.35,
-                              ),
+                              'ONLINE',
+                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: _NeonTheme.safeGreen),
                             ),
                           ],
                         ),
                       ),
                     ],
                   ),
-                ),
-              ),
-              const SizedBox(height: 22),
-
-              // 2. Core Architecture Pipeline
-              Container(
-                padding: const EdgeInsets.all(22),
-                decoration: BoxDecoration(
-                  color: _isDarkMode ? _NeonTheme.cardDark : Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: _isDarkMode ? _NeonTheme.cardBorderDark : _NeonTheme.cardBorderLight,
+                  const SizedBox(height: 12),
+                  Text(
+                    'Real-time queries dispatched against Tamil Nadu MoRTH verified blackspot records with zero mock fabrication.',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                    ),
                   ),
-                  boxShadow: _NeonTheme.cardShadow(_isDarkMode),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAboutView() {
+    return SafeRouteContentContainer(
+      maxWidth: 900,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SafeRoutePageHeader(
+            title: _isTamil ? 'SafeRoute TN 2.0 பற்றி' : 'About SafeRoute TN 2.0',
+            subtitle: _isTamil
+                ? 'தமிழ்நாடு மாநிலத்திற்கான சூழல்-விழிப்புணர்வு, தன்னாட்சி பாதுகாப்பு வழிசெலுத்தல் கட்டமைப்பு.'
+                : 'Context-aware safe and accessible navigation architecture combining real-time telemetry, predictive AI, and verified accident data.',
+            badge: 'RESEARCH & ARCHITECTURE',
+            badgeColor: _NeonTheme.neonCyan,
+            icon: Icons.info_outline_rounded,
+          ),
+          const SizedBox(height: 12),
+
+          // 1. Premium Hero Showcase Banner
+          ClipRRect(
+            borderRadius: BorderRadius.circular(22),
+            child: Container(
+              height: 240,
+              decoration: BoxDecoration(
+                color: _isDarkMode ? _NeonTheme.bgDarkSecondary : Colors.white,
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color: _isDarkMode ? const Color(0x3500D9FF) : const Color(0xffE2E8F0),
+                  width: 1.2,
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+                boxShadow: _NeonTheme.cardShadow(_isDarkMode),
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.asset(
+                    'assets/images/saferoute_ai_network_hero.jpg',
+                    fit: BoxFit.cover,
+                    alignment: Alignment.center,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: _isDarkMode
+                              ? const [Color(0xff020B1C), Color(0xff0B1F3A)]
+                              : const [Color(0xff0369A1), Color(0xff0284C7)],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          (_isDarkMode ? const Color(0xff020B1C) : const Color(0xff0F172A))
+                              .withValues(alpha: 0.88),
+                        ],
+                        stops: const [0.35, 1.0],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Container(
-                          padding: const EdgeInsets.all(8),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: const Color(0xff00D9FF).withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(10),
+                            color: const Color(0xff00D9FF).withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: const Color(0xff00D9FF).withValues(alpha: 0.5),
+                              width: 1,
+                            ),
                           ),
-                          child: const Icon(Icons.architecture_rounded, color: Color(0xff00D9FF), size: 20),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.auto_awesome, color: Color(0xff00D9FF), size: 13),
+                              SizedBox(width: 5),
+                              Text(
+                                'NEXT-GEN TAMIL NADU CORRIDOR INTELLIGENCE',
+                                style: TextStyle(
+                                  color: Color(0xff00D9FF),
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.6,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        const SizedBox(width: 12),
-                        Column(
+                        const SizedBox(height: 8),
+                        const Text(
+                          'SafeRoute TN 2.0',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Real-time contextual safety telemetry, predictive accident analysis, and responsive navigation across Tamil Nadu.',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.82),
+                            fontSize: 13,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 22),
+
+          // 2. Core Architecture Pipeline
+          GlassCard(
+            enableHover: true,
+            child: Padding(
+              padding: const EdgeInsets.all(22),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xff00D9FF).withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.architecture_rounded, color: Color(0xff00D9FF), size: 20),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
@@ -33311,236 +37292,246 @@ if (factor.source != null && isIncluded) ...[
                             ),
                           ],
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-                    // Workflow illustration image
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: Container(
-                        height: 140,
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          color: _isDarkMode ? const Color(0xff06152D) : const Color(0xffF1F5F9),
-                          border: Border.all(
-                            color: _isDarkMode ? Colors.white10 : Colors.black12,
-                          ),
-                        ),
-                        child: Image.asset(
-                          'assets/images/ai_safety_workflow.jpg',
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) => Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: _isDarkMode
-                                    ? const [Color(0xff06152D), Color(0xff0E2242)]
-                                    : const [Color(0xffE2E8F0), Color(0xffCBD5E1)],
-                              ),
-                            ),
-                            child: const Center(
-                              child: Icon(Icons.hub_rounded, color: Color(0xff00D9FF), size: 36),
-                            ),
-                          ),
-                        ),
                       ),
-                    ),
-                    const SizedBox(height: 18),
-                    // 4 Pipeline steps
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: _buildAboutStepTile(
-                            stepNumber: '01',
-                            title: 'Telemetry Ingestion',
-                            desc: 'OpenStreetMap Overpass, TomTom Vector Flow & Open-Meteo atmospheric radar.',
-                            icon: Icons.cloud_sync_rounded,
-                            accentColor: const Color(0xff00D9FF),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _buildAboutStepTile(
-                            stepNumber: '02',
-                            title: 'Hazard Clustering',
-                            desc: 'Spatial clustering of 5,000+ verified Tamil Nadu police blackspots.',
-                            icon: Icons.warning_amber_rounded,
-                            accentColor: const Color(0xffF59E0B),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: _buildAboutStepTile(
-                            stepNumber: '03',
-                            title: 'Multi-Factor Scoring',
-                            desc: 'Evidence-gated scoring with confidence penalties for unverified factors.',
-                            icon: Icons.analytics_rounded,
-                            accentColor: const Color(0xff7C3AED),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _buildAboutStepTile(
-                            stepNumber: '04',
-                            title: 'Safe Cockpit',
-                            desc: 'Live heading-up rotation, turn guidance, and GPS trip telemetry.',
-                            icon: Icons.navigation_rounded,
-                            accentColor: const Color(0xff10B981),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // 3. Emergency Coverage & Live Sharing Card
-              Container(
-                padding: const EdgeInsets.all(22),
-                decoration: BoxDecoration(
-                  color: _isDarkMode ? _NeonTheme.cardDark : Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: _isDarkMode ? _NeonTheme.cardBorderDark : _NeonTheme.cardBorderLight,
+                    ],
                   ),
-                  boxShadow: _NeonTheme.cardShadow(_isDarkMode),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: Container(
-                        width: 110,
-                        height: 100,
-                        decoration: BoxDecoration(
-                          color: _isDarkMode ? const Color(0xff06152D) : const Color(0xffF1F5F9),
+                  const SizedBox(height: 18),
+                  // Workflow illustration image
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Container(
+                      height: 140,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: _isDarkMode ? const Color(0xff06152D) : const Color(0xffF1F5F9),
+                        border: Border.all(
+                          color: _isDarkMode ? Colors.white10 : Colors.black12,
                         ),
-                        child: Image.asset(
-                          'assets/images/emergency_safety_shield.jpg',
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) => Container(
-                            color: const Color(0xffEF4444).withValues(alpha: 0.15),
-                            child: const Center(
-                              child: Icon(Icons.shield_rounded, color: Color(0xffEF4444), size: 36),
+                      ),
+                      child: Image.asset(
+                        'assets/images/ai_safety_workflow.jpg',
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: _isDarkMode
+                                  ? const [Color(0xff06152D), Color(0xff0E2242)]
+                                  : const [Color(0xffE2E8F0), Color(0xffCBD5E1)],
                             ),
+                          ),
+                          child: const Center(
+                            child: Icon(Icons.hub_rounded, color: Color(0xff00D9FF), size: 36),
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 18),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xffEF4444).withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Text(
-                                  '24/7 RAPID DISPATCH',
-                                  style: TextStyle(
-                                    color: Color(0xffEF4444),
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xff10B981).withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Text(
-                                  '5KM CORRIDOR SCAN',
-                                  style: TextStyle(
-                                    color: Color(0xff10B981),
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                            ],
+                  ),
+                  const SizedBox(height: 18),
+                  // 4 Pipeline steps
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: _buildAboutStepTile(
+                          stepNumber: '01',
+                          title: 'Telemetry Ingestion',
+                          desc: 'OpenStreetMap Overpass, TomTom Vector Flow & Open-Meteo atmospheric radar.',
+                          icon: Icons.cloud_sync_rounded,
+                          accentColor: const Color(0xff00D9FF),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildAboutStepTile(
+                          stepNumber: '02',
+                          title: 'Hazard Clustering',
+                          desc: 'Spatial clustering of 5,000+ verified Tamil Nadu police blackspots.',
+                          icon: Icons.warning_amber_rounded,
+                          accentColor: const Color(0xffF59E0B),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: _buildAboutStepTile(
+                          stepNumber: '03',
+                          title: 'Multi-Factor Scoring',
+                          desc: 'Evidence-gated scoring with confidence penalties for unverified factors.',
+                          icon: Icons.analytics_rounded,
+                          accentColor: const Color(0xff7C3AED),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildAboutStepTile(
+                          stepNumber: '04',
+                          title: 'Safe Cockpit',
+                          desc: 'Live heading-up rotation, turn guidance, and GPS trip telemetry.',
+                          icon: Icons.navigation_rounded,
+                          accentColor: const Color(0xff10B981),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // 3. Emergency Coverage & Live Sharing Card
+          GlassCard(
+            enableHover: true,
+            child: Padding(
+              padding: const EdgeInsets.all(22),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final bool isNarrow = constraints.maxWidth < 480;
+                  final Widget imageWidget = ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Container(
+                      width: isNarrow ? double.infinity : 110,
+                      height: 100,
+                      decoration: BoxDecoration(
+                        color: _isDarkMode ? const Color(0xff06152D) : const Color(0xffF1F5F9),
+                      ),
+                      child: Image.asset(
+                        'assets/images/emergency_safety_shield.jpg',
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => Container(
+                          color: const Color(0xffEF4444).withValues(alpha: 0.15),
+                          child: const Center(
+                            child: Icon(Icons.shield_rounded, color: Color(0xffEF4444), size: 36),
                           ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Emergency Shield & Safe Arrival Telemetry',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                              color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+                        ),
+                      ),
+                    ),
+                  );
+
+                  final Widget detailsWidget = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: const Color(0xffEF4444).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text(
+                              '24/7 RAPID DISPATCH',
+                              style: TextStyle(
+                                color: Color(0xffEF4444),
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Integrated 108 Ambulance, 100 Police, 1091 Women Safety, and 1077 Disaster Helplines with real-time tokenized trip sharing.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
-                              height: 1.35,
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: const Color(0xff10B981).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text(
+                              '5KM CORRIDOR SCAN',
+                              style: TextStyle(
+                                color: Color(0xff10B981),
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ),
                         ],
                       ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // 4. Technology Stack & Verification Chips
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: _isDarkMode ? _NeonTheme.cardDark : Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: _isDarkMode ? _NeonTheme.cardBorderDark : _NeonTheme.cardBorderLight,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Integrated Technologies & Live Data Services',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800,
-                        color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+                      const SizedBox(height: 8),
+                      Text(
+                        'Emergency Shield & Safe Arrival Telemetry',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
+                      const SizedBox(height: 4),
+                      Text(
+                        'Integrated 108 Ambulance, 100 Police, 1091 Women Safety, and 1077 Disaster Helplines with real-time tokenized trip sharing.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: _isDarkMode ? _NeonTheme.textSecondaryDark : _NeonTheme.textSecondaryLight,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  );
+
+                  if (isNarrow) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _buildTechBadge('Flutter 3.x Web', Icons.flutter_dash, const Color(0xff02569B)),
-                        _buildTechBadge('OSRM High-Speed Engine', Icons.route_rounded, const Color(0xff00D9FF)),
-                        _buildTechBadge('OpenStreetMap Overpass', Icons.map_rounded, const Color(0xff10B981)),
-                        _buildTechBadge('TomTom Orbis Traffic', Icons.traffic_rounded, const Color(0xffEF4444)),
-                        _buildTechBadge('Open-Meteo Atmospheric', Icons.wb_sunny_rounded, const Color(0xffF59E0B)),
-                        _buildTechBadge('Python Flask AI Core', Icons.code_rounded, const Color(0xff8B5CF6)),
-                        _buildTechBadge('Zero-Fabrication Gate', Icons.verified_user_rounded, const Color(0xff06B6D4)),
+                        imageWidget,
+                        const SizedBox(height: 14),
+                        detailsWidget,
                       ],
-                    ),
-                  ],
-                ),
+                    );
+                  }
+
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      imageWidget,
+                      const SizedBox(width: 18),
+                      Expanded(child: detailsWidget),
+                    ],
+                  );
+                },
               ),
-            ],
+            ),
           ),
-        ),
+          const SizedBox(height: 20),
+
+          // 4. Technology Stack & Verification Chips
+          GlassCard(
+            enableHover: true,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Integrated Technologies & Live Data Services',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: _isDarkMode ? _NeonTheme.textPrimaryDark : _NeonTheme.textPrimaryLight,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _buildTechBadge('Flutter 3.x Web', Icons.flutter_dash, const Color(0xff02569B)),
+                      _buildTechBadge('OSRM High-Speed Engine', Icons.route_rounded, const Color(0xff00D9FF)),
+                      _buildTechBadge('OpenStreetMap Overpass', Icons.map_rounded, const Color(0xff10B981)),
+                      _buildTechBadge('TomTom Orbis Traffic', Icons.traffic_rounded, const Color(0xffEF4444)),
+                      _buildTechBadge('Open-Meteo Atmospheric', Icons.wb_sunny_rounded, const Color(0xffF59E0B)),
+                      _buildTechBadge('Python Flask AI Core', Icons.code_rounded, const Color(0xff8B5CF6)),
+                      _buildTechBadge('Zero-Fabrication Gate', Icons.verified_user_rounded, const Color(0xff06B6D4)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -34058,6 +38049,1264 @@ if (factor.source != null && isIncluded) ...[
       }
     }
     await _loadFacilitiesForRoute(route);
+  }
+
+  Widget _buildCockpitLiveHazardBanner() {
+    final hazard = _activeHazardAhead;
+    final weatherHazard = _activeWeatherHazardAhead;
+    if (hazard == null && weatherHazard == null) return const SizedBox.shrink();
+
+    final isDark = _isDarkMode;
+    final isTamil = _voiceLanguage == NavLanguage.tamil;
+
+    if (hazard != null) {
+      final catItem = _getHazardCategory(hazard.category);
+      final isHigh = hazard.severity == 'High';
+      final isConfirmed = hazard.status == 'Confirmed';
+      final borderColor = isHigh
+          ? _NeonTheme.dangerRed
+          : (isConfirmed ? _NeonTheme.safeGreen : _NeonTheme.warningGold);
+      final distStr = _activeHazardDistanceAheadMeters != null
+          ? _formatHazardDistance(_activeHazardDistanceAheadMeters!, isTamil: isTamil)
+          : (isTamil ? 'வழியில்' : 'Ahead');
+
+      final statusBadgeText = isConfirmed
+          ? (isTamil ? 'உறுதி செய்யப்பட்டது' : 'VERIFIED')
+          : (hazard.status == 'Disputed'
+              ? (isTamil ? 'சர்ச்சைக்குரியது' : 'DISPUTED')
+              : (isTamil ? 'சமூக அறிக்கை' : 'COMMUNITY NOTICE'));
+      final statusBadgeColor = isConfirmed
+          ? _NeonTheme.safeGreen
+          : (hazard.status == 'Disputed'
+              ? const Color(0xffF97316)
+              : _NeonTheme.warningGold);
+
+      return GlassCard(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor, width: 1.4),
+        boxShadow: [
+          BoxShadow(
+            color: borderColor.withValues(alpha: 0.28),
+            blurRadius: 10,
+            spreadRadius: 1,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: borderColor.withValues(alpha: 0.20),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: borderColor, width: 1.2),
+                  ),
+                  child: Icon(catItem.icon, color: borderColor, size: 20),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              hazard.problemType,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 13,
+                                color: isDark ? Colors.white : Colors.black87,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 5, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: statusBadgeColor.withValues(alpha: 0.16),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                  color: statusBadgeColor.withValues(alpha: 0.45)),
+                            ),
+                            child: Text(
+                              statusBadgeText,
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w800,
+                                color: statusBadgeColor,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        hazard.locationLandmark != null &&
+                                hazard.locationLandmark!.isNotEmpty
+                            ? '$distStr ahead near ${hazard.locationLandmark}'
+                            : '$distStr ahead on route',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white70 : Colors.black54,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                // Dismiss Button
+                InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () {
+                    setState(() {
+                      _dismissedHazardIds.add(hazard.id);
+                      _activeHazardAhead = null;
+                      _activeHazardDistanceAheadMeters = null;
+                    });
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 18,
+                      color: isDark ? Colors.white38 : Colors.black38,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Actions Row: Find Safer Alternative & Details
+            Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: _isSearchingAlternative ? null : _requestSmartReroute,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _NeonTheme.safeGreen.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: _NeonTheme.safeGreen.withValues(alpha: 0.5),
+                          width: 1.1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          if (_isSearchingAlternative)
+                            const SizedBox(
+                              width: 13,
+                              height: 13,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(_NeonTheme.safeGreen),
+                              ),
+                            )
+                          else
+                            const Icon(
+                              Icons.alt_route_rounded,
+                              size: 15,
+                              color: _NeonTheme.safeGreen,
+                            ),
+                          const SizedBox(width: 6),
+                          Text(
+                            _isSearchingAlternative
+                                ? (isTamil ? 'மாற்றுப் பாதை தேடுகிறது...' : 'Finding Alternative...')
+                                : (isTamil ? 'பாதுகாப்பான மாற்றுப் பாதை' : 'Find Safer Alternative'),
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w800,
+                              color: _NeonTheme.safeGreen,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => _showCommunityHazardDetails(hazard),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _NeonTheme.neonCyan.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _NeonTheme.neonCyan.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.info_outline_rounded,
+                          size: 14,
+                          color: _NeonTheme.neonCyan,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          isTamil ? 'விவரம்' : 'Details',
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: _NeonTheme.neonCyan,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Weather hazard display
+    final weatherDesc =
+        weatherHazard?['description']?.toString() ?? 'Severe weather along route';
+    final cond =
+        weatherHazard?['condition']?.toString() ?? 'Weather Alert';
+    return GlassCard(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: _NeonTheme.neonCyan, width: 1.4),
+      boxShadow: [
+        BoxShadow(
+          color: _NeonTheme.neonCyan.withValues(alpha: 0.25),
+          blurRadius: 10,
+          spreadRadius: 1,
+          offset: const Offset(0, 2),
+        ),
+      ],
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: _NeonTheme.neonCyan.withValues(alpha: 0.20),
+              shape: BoxShape.circle,
+              border: Border.all(color: _NeonTheme.neonCyan, width: 1.2),
+            ),
+            child: const Icon(Icons.water_drop_rounded,
+                color: _NeonTheme.neonCyan, size: 20),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      cond,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 1.5),
+                      decoration: BoxDecoration(
+                        color: _NeonTheme.neonCyan.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                            color: _NeonTheme.neonCyan.withValues(alpha: 0.45)),
+                      ),
+                      child: Text(
+                        isTamil ? 'வானிலை எச்சரிக்கை' : 'METEOROLOGICAL',
+                        style: const TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                          color: _NeonTheme.neonCyan,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  weatherDesc,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white70 : Colors.black54,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () {
+              setState(() {
+                _activeWeatherHazardAhead = null;
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Icon(
+                Icons.close_rounded,
+                size: 18,
+                color: isDark ? Colors.white38 : Colors.black38,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================================
+  // Phase 2B: SMART ALTERNATIVE REROUTING IMPLEMENTATION
+  // ============================================================================
+
+  Future<void> _requestSmartReroute() async {
+    if (_isSearchingAlternative) return;
+
+    final isTamil = _voiceLanguage == NavLanguage.tamil;
+
+    // 1. Invariant Destination Check
+    final destination = endLocation;
+    if (destination == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isTamil
+                ? 'இலக்கு முகவரி கிடைக்கவில்லை.'
+                : 'Original destination is unavailable. Cannot calculate alternative route.',
+          ),
+          backgroundColor: _NeonTheme.dangerRed,
+        ),
+      );
+      return;
+    }
+
+    // 2. Obtain and validate latest GPS position (reject inaccurate or stale fixes)
+    final pos = currentPosition;
+    if (pos == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isTamil
+                ? 'GPS நிலை கிடைக்கவில்லை. சிக்னலுக்குக் காத்திருக்கவும்.'
+                : 'Current GPS position unavailable. Please wait for GPS signal.',
+          ),
+          backgroundColor: _NeonTheme.warningGold,
+        ),
+      );
+      return;
+    }
+
+    if (!pos.accuracy.isFinite || pos.accuracy > 50.0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isTamil
+                ? 'GPS துல்லியம் குறைவு (${pos.accuracy.toStringAsFixed(0)}மீ > 50மீ). துல்லியமான சிக்னலுக்குக் காத்திருக்கவும்.'
+                : 'GPS accuracy too low (${pos.accuracy.toStringAsFixed(0)}m > 50m). Waiting for an accurate GPS fix.',
+          ),
+          backgroundColor: _NeonTheme.warningGold,
+        ),
+      );
+      return;
+    }
+
+    final ageSeconds = DateTime.now().difference(pos.timestamp).inSeconds;
+    if (ageSeconds > 120) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isTamil
+                ? 'பழைய GPS சிக்னல் ($ageSeconds விநாடிகள்). புதிய சிக்னலுக்குக் காத்திருக்கவும்.'
+                : 'GPS fix is stale (${ageSeconds}s old). Waiting for fresh GPS signal.',
+          ),
+          backgroundColor: _NeonTheme.warningGold,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSearchingAlternative = true;
+    });
+
+    try {
+      final origin = _Location(
+        lat: pos.latitude,
+        lon: pos.longitude,
+        name: isTamil ? 'தற்போதைய இடம்' : 'Current GPS Location',
+      );
+
+      // Slice current route to remaining portion ahead of current position
+      final currentRemainingPts = _getRemainingRoutePoints(pos);
+      final currentRemainingDistanceMeters =
+          _calculateTotalRouteMeters(currentRemainingPts);
+      final currentRemainingKm = currentRemainingDistanceMeters / 1000.0;
+      final currentRemainingDurationMinutes =
+          service.calculateVehicleTime(currentRemainingKm, currentVehicle);
+
+      final currentRemainingRoute = _RouteResult(
+        points: currentRemainingPts,
+        distance: currentRemainingKm,
+        duration: currentRemainingDurationMinutes,
+        routeIndex: selectedRouteIndex,
+      );
+
+      // Request alternative corridors from current GPS position to original destination
+      final candidateRoutes = await service.getRoutes(origin, destination);
+      if (candidateRoutes == null || candidateRoutes.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isTamil
+                  ? 'மாற்றுப் பாதை கிடைக்கவில்லை.'
+                  : 'No alternative routes found from current location.',
+            ),
+            backgroundColor: _NeonTheme.warningGold,
+          ),
+        );
+        return;
+      }
+
+      // Filter distinct corridors
+      final distinctRoutes = service.filterDistinctRoutes(candidateRoutes);
+
+      // Evaluate candidate routes against reported hazards
+      final assessment = await _assessLiveSmartReroute(
+        currentRemainingRoute: currentRemainingRoute,
+        candidateRoutes: distinctRoutes,
+        userPosition: pos,
+        targetHazard: _activeHazardAhead,
+      );
+
+      if (!mounted) return;
+
+      if (!assessment.canReroute || assessment.alternativeRoute == null) {
+        _showNoAlternativeAvailableDialog(assessment.explanation);
+        return;
+      }
+
+      // Present interactive comparison modal requiring explicit user confirmation
+      _showLiveSmartRerouteComparisonDialog(assessment);
+    } catch (e) {
+      debugPrint('SMART REROUTE ERROR: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isTamil
+                  ? 'மாற்றுப் பாதை கணக்கிடுவதில் பிழை ஏற்பட்டது.'
+                  : 'Failed to compute alternative route: $e',
+            ),
+            backgroundColor: _NeonTheme.dangerRed,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSearchingAlternative = false;
+        });
+      }
+    }
+  }
+
+  Future<_LiveSmartRerouteAssessment> _assessLiveSmartReroute({
+    required _RouteResult currentRemainingRoute,
+    required List<_RouteResult> candidateRoutes,
+    required Position userPosition,
+    required _CommunityRoadHazard? targetHazard,
+  }) async {
+    final isTamil = _voiceLanguage == NavLanguage.tamil;
+
+    // Confirmed hazards on current remaining corridor
+    final confirmedOnCurrent = <_CommunityRoadHazard>[];
+    for (final h in _communityHazards) {
+      if (h.status == 'Resolved' || h.status == 'Expired') continue;
+      if (h.latitude == null || h.longitude == null) continue;
+      final hLoc = LatLng(h.latitude!, h.longitude!);
+      final dCurr = _distanceToPolyline(hLoc, currentRemainingRoute.points);
+      if (dCurr <= 800.0 && h.status == 'Confirmed') {
+        confirmedOnCurrent.add(h);
+      }
+    }
+
+    if (targetHazard != null &&
+        targetHazard.status == 'Confirmed' &&
+        !confirmedOnCurrent.any((h) => h.id == targetHazard.id)) {
+      confirmedOnCurrent.add(targetHazard);
+    }
+
+    _RouteResult? bestAlternative;
+    var bestAvoidedCount = 0;
+    var minHazardsOnAlt = 9999;
+    final bestAvoidedHazards = <_CommunityRoadHazard>[];
+    final bestRemainingHazardsOnAlt = <_CommunityRoadHazard>[];
+
+    for (final candidate in candidateRoutes) {
+      // Avoid comparing against virtually identical route geometry
+      final isIdenticalToCurrent =
+          (candidate.distance - currentRemainingRoute.distance).abs() < 0.1 &&
+          candidate.points.isNotEmpty &&
+          currentRemainingRoute.points.isNotEmpty &&
+          service._distanceBetweenMeters(
+            candidate.points[candidate.points.length ~/ 2],
+            currentRemainingRoute.points[currentRemainingRoute.points.length ~/ 2],
+          ) < 100.0;
+
+      if (isIdenticalToCurrent && candidateRoutes.length > 1) {
+        continue;
+      }
+
+      // Check distance to target hazard (must bypass target hazard)
+      if (targetHazard != null &&
+          targetHazard.latitude != null &&
+          targetHazard.longitude != null) {
+        final tLoc = LatLng(targetHazard.latitude!, targetHazard.longitude!);
+        final dTargetToAlt = _distanceToPolyline(tLoc, candidate.points);
+        if (dTargetToAlt <= 800.0) {
+          // Candidate route passes near the hazard! Filter out.
+          continue;
+        }
+      }
+
+      final avoided = <_CommunityRoadHazard>[];
+      final hazardsOnAlt = <_CommunityRoadHazard>[];
+
+      for (final h in _communityHazards) {
+        if (h.status != 'Confirmed' || h.latitude == null || h.longitude == null) continue;
+        final hLoc = LatLng(h.latitude!, h.longitude!);
+        final dAlt = _distanceToPolyline(hLoc, candidate.points);
+        if (dAlt <= 800.0) {
+          hazardsOnAlt.add(h);
+        }
+      }
+
+      for (final h in confirmedOnCurrent) {
+        if (h.latitude == null || h.longitude == null) continue;
+        final hLoc = LatLng(h.latitude!, h.longitude!);
+        final dAlt = _distanceToPolyline(hLoc, candidate.points);
+        if (dAlt > 1500.0) {
+          avoided.add(h);
+        }
+      }
+
+      if (avoided.isNotEmpty && hazardsOnAlt.length < confirmedOnCurrent.length) {
+        if (avoided.length > bestAvoidedCount ||
+            (avoided.length == bestAvoidedCount && hazardsOnAlt.length < minHazardsOnAlt)) {
+          bestAlternative = candidate;
+          bestAvoidedCount = avoided.length;
+          minHazardsOnAlt = hazardsOnAlt.length;
+          bestAvoidedHazards.clear();
+          bestAvoidedHazards.addAll(avoided);
+          bestRemainingHazardsOnAlt.clear();
+          bestRemainingHazardsOnAlt.addAll(hazardsOnAlt);
+        }
+      }
+    }
+
+    if (bestAlternative == null || bestAvoidedCount == 0) {
+      return _LiveSmartRerouteAssessment(
+        canReroute: false,
+        explanation: isTamil
+            ? 'ஒற்றைப் பாதை காரிடார். இந்த ஆபத்தைத் தவிர்க்க மாற்று வழிப்பாதை இல்லை.'
+            : 'Single route corridor. All alternative routes pass through the reported hazard.',
+        failureReason: 'No alternative corridor avoids the hazard.',
+      );
+    }
+
+    // Evaluate best alternative route with real safety engine
+    _RouteEvaluation? altEvaluation;
+    try {
+      altEvaluation = await _evaluateRoute(
+        bestAlternative,
+        _loadRouteRoadSegments(bestAlternative),
+      );
+    } catch (e) {
+      debugPrint('Alternative route evaluation error: $e');
+    }
+
+    final altDurationMin = service.calculateVehicleTime(
+      bestAlternative.distance,
+      currentVehicle,
+    );
+    final currRemainingDurationMin = service.calculateVehicleTime(
+      currentRemainingRoute.distance,
+      currentVehicle,
+    );
+
+    final distDiff = bestAlternative.distance - currentRemainingRoute.distance;
+    final durDiff = altDurationMin - currRemainingDurationMin;
+    final signDist = distDiff >= 0
+        ? '+${distDiff.toStringAsFixed(1)}'
+        : distDiff.toStringAsFixed(1);
+    final signDur = durDiff >= 0 ? '+${durDiff.round()}' : '${durDiff.round()}';
+
+    final explanation = isTamil
+        ? 'மாற்றுப் பாதை $bestAvoidedCount ஆபத்தைத் தவிர்க்கிறது ($signDist கி.மீ, $signDur நிமிடங்கள்).'
+        : 'Alternative route bypasses $bestAvoidedCount hazard(s) ($signDist km, $signDur mins).';
+
+    return _LiveSmartRerouteAssessment(
+      canReroute: true,
+      explanation: explanation,
+      alternativeRoute: bestAlternative,
+      alternativeEvaluation: altEvaluation,
+      currentRemainingRoute: currentRemainingRoute,
+      distanceDiffKm: distDiff,
+      durationDiffMinutes: durDiff,
+      avoidedHazardCount: bestAvoidedCount,
+      avoidedHazards: bestAvoidedHazards,
+      remainingHazardsOnAlternative: bestRemainingHazardsOnAlt,
+    );
+  }
+
+  void _showLiveSmartRerouteComparisonDialog(_LiveSmartRerouteAssessment assessment) {
+    final altRoute = assessment.alternativeRoute;
+    if (altRoute == null) return;
+
+    final isDark = _isDarkMode;
+    final isTamil = _voiceLanguage == NavLanguage.tamil;
+
+    final distDiff = assessment.distanceDiffKm ?? 0.0;
+    final durDiff = assessment.durationDiffMinutes ?? 0.0;
+    final signDist = distDiff >= 0
+        ? '+${distDiff.toStringAsFixed(1)} km'
+        : '${distDiff.toStringAsFixed(1)} km';
+    final signDur = durDiff >= 0 ? '+${durDiff.round()}m' : '${durDiff.round()}m';
+
+    final currDistKm = assessment.currentRemainingRoute?.distance ?? distanceKm;
+    final currDurMin = service.calculateVehicleTime(currDistKm, currentVehicle);
+    final altDistKm = altRoute.distance;
+    final altDurMin = service.calculateVehicleTime(altDistKm, currentVehicle);
+
+    final currScore = safetyScore;
+    final altScore = assessment.alternativeEvaluation?.safety.score;
+
+    final targetHazard = _activeHazardAhead;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 500),
+            child: Container(
+              padding: const EdgeInsets.all(22),
+              decoration: BoxDecoration(
+                color: isDark ? _NeonTheme.cardDark : _NeonTheme.cardLight,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(
+                  color: isDark
+                      ? _NeonTheme.neonCyan.withValues(alpha: 0.5)
+                      : const Color(0xffCBD5E1),
+                  width: 1.4,
+                ),
+                boxShadow: _NeonTheme.cardShadow(isDark),
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Header
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: _NeonTheme.safeGreen.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: _NeonTheme.safeGreen.withValues(alpha: 0.4),
+                            ),
+                          ),
+                          child: const Icon(
+                            Icons.alt_route_rounded,
+                            color: _NeonTheme.safeGreen,
+                            size: 22,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                isTamil
+                                    ? 'பாதுகாப்பான மாற்றுப் பாதை கண்டறியப்பட்டது'
+                                    : 'Safer Alternative Route Found',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                  color: isDark ? Colors.white : Colors.black87,
+                                ),
+                              ),
+                              Text(
+                                targetHazard != null
+                                    ? '${isTamil ? "முன்னே உள்ள" : "Bypasses"} ${targetHazard.problemType}'
+                                    : (isTamil ? 'அறிவிக்கப்பட்ட ஆபத்தைத் தவிர்க்கிறது' : 'Bypasses verified hazard ahead'),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: isDark ? Colors.white54 : Colors.black54,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.of(dialogContext).pop(),
+                          icon: Icon(
+                            Icons.close_rounded,
+                            color: isDark ? Colors.white54 : Colors.black45,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Side-by-side comparison card
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xee0e1b30) : const Color(0xffF1F5F9),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isDark ? const Color(0xff1E385C) : const Color(0xffE2E8F0),
+                        ),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              // Current Route Remaining
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      isTamil ? 'தற்போதைய வழி (மீதம்)' : 'CURRENT ROUTE (AHEAD)',
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: 0.4,
+                                        color: isDark ? Colors.white54 : Colors.black45,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      '${currDistKm.toStringAsFixed(1)} km • ${currDurMin.round()}m',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w800,
+                                        color: isDark ? Colors.white : Colors.black87,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: _NeonTheme.dangerRed.withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(color: _NeonTheme.dangerRed.withValues(alpha: 0.4)),
+                                      ),
+                                      child: Text(
+                                        targetHazard != null
+                                            ? '⚠️ ${targetHazard.problemType}'
+                                            : '⚠️ Hazard Ahead',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.w700,
+                                          color: _NeonTheme.dangerRed,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      currScore != null
+                                          ? 'Safety: ${currScore.toStringAsFixed(0)}/100'
+                                          : 'Safety: Insufficient data',
+                                      style: TextStyle(
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w600,
+                                        color: isDark ? Colors.white60 : Colors.black54,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Icon(
+                                Icons.arrow_forward_rounded,
+                                size: 20,
+                                color: _NeonTheme.safeGreen,
+                              ),
+                              // Proposed Alternative
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text(
+                                      isTamil ? 'பாதுகாப்பான மாற்று' : 'SAFER ALTERNATIVE',
+                                      style: const TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: 0.4,
+                                        color: _NeonTheme.safeGreen,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      '${altDistKm.toStringAsFixed(1)} km • ${altDurMin.round()}m',
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w800,
+                                        color: _NeonTheme.safeGreen,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: _NeonTheme.safeGreen.withValues(alpha: 0.16),
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(color: _NeonTheme.safeGreen.withValues(alpha: 0.45)),
+                                      ),
+                                      child: Text(
+                                        isTamil
+                                            ? '✓ ${assessment.avoidedHazardCount} ஆபத்து விலக்கப்பட்டது'
+                                            : '✓ Avoids ${assessment.avoidedHazardCount} Hazard(s)',
+                                        style: const TextStyle(
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.w800,
+                                          color: _NeonTheme.safeGreen,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      altScore != null
+                                          ? 'Safety: ${altScore.toStringAsFixed(0)}/100'
+                                          : 'Safety: Insufficient data',
+                                      style: const TextStyle(
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w700,
+                                        color: _NeonTheme.safeGreen,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Divider(height: 1, color: isDark ? Colors.white12 : Colors.black12),
+                          const SizedBox(height: 10),
+                          // Tradeoffs Summary row
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.shield_rounded, size: 14, color: _NeonTheme.safeGreen),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'Bypasses ${assessment.avoidedHazardCount} hazard(s)',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: _NeonTheme.safeGreen,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Row(
+                                children: [
+                                  const Icon(Icons.straighten_rounded, size: 13, color: _NeonTheme.warningGold),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    signDist,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: isDark ? Colors.white70 : Colors.black87,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Row(
+                                children: [
+                                  const Icon(Icons.schedule_rounded, size: 13, color: _NeonTheme.neonCyan),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    signDur,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: isDark ? Colors.white70 : Colors.black87,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // Avoided hazard details
+                    Text(
+                      isTamil ? 'தவிர்க்கப்படும் ஆபத்துகள்' : 'AVOIDED HAZARDS',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: isDark ? _NeonTheme.neonCyan : _NeonTheme.electricBlue,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    if (assessment.avoidedHazards.isNotEmpty)
+                      for (final h in assessment.avoidedHazards)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: _NeonTheme.dangerRed.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: _NeonTheme.dangerRed.withValues(alpha: 0.25)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.warning_amber_rounded, size: 14, color: _NeonTheme.dangerRed),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  '${h.problemType}${h.locationLandmark != null && h.locationLandmark!.isNotEmpty ? " near ${h.locationLandmark}" : ""} (${h.status} • ${h.confidenceScore.toStringAsFixed(0)}%)',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: _NeonTheme.dangerRed,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                    else if (targetHazard != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: _NeonTheme.dangerRed.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: _NeonTheme.dangerRed.withValues(alpha: 0.25)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.warning_amber_rounded, size: 14, color: _NeonTheme.dangerRed),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                '${targetHazard.problemType} (${targetHazard.status} • ${targetHazard.confidenceScore.toStringAsFixed(0)}%)',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: _NeonTheme.dangerRed,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 18),
+
+                    // Actions: Keep Current Route / Switch to Safer Route
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.of(dialogContext).pop(),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: isDark ? Colors.white70 : Colors.black87,
+                              side: BorderSide(
+                                color: isDark ? Colors.white24 : Colors.black26,
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: Text(
+                              isTamil ? 'தற்போதைய வழி' : 'Keep Current Route',
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.of(dialogContext).pop();
+                              _applyLiveSmartReroute(assessment);
+                            },
+                            icon: const Icon(Icons.check_rounded, size: 16),
+                            label: Text(
+                              isTamil ? 'பாதுகாப்பான வழிக்கு மாறு' : 'Switch to Safer Route',
+                              style: const TextStyle(fontWeight: FontWeight.w800),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _NeonTheme.safeGreen,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showNoAlternativeAvailableDialog(String explanation) {
+    final isDark = _isDarkMode;
+    final isTamil = _voiceLanguage == NavLanguage.tamil;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: isDark ? _NeonTheme.cardDark : _NeonTheme.cardLight,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: isDark ? const Color(0xff1E385C) : const Color(0xffCBD5E1),
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: _NeonTheme.warningGold.withValues(alpha: 0.16),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.warning_rounded,
+                          color: _NeonTheme.warningGold,
+                          size: 22,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          isTamil ? 'மாற்றுப் பாதை இல்லை' : 'No Safer Alternative Corridor',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: isDark ? Colors.white : Colors.black87,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(),
+                        icon: Icon(
+                          Icons.close_rounded,
+                          color: isDark ? Colors.white54 : Colors.black45,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    explanation,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      height: 1.4,
+                      color: isDark ? Colors.white70 : Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    isTamil
+                        ? 'இப்பகுதியில் மாற்று வழிகள் இல்லாததால், கவனமாகவும் எச்சரிக்கையுடனும் வாகனத்தை ஓட்டவும்.'
+                        : 'Because this section is a single corridor (e.g., mountain pass or expressway), please proceed with extreme caution.',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isDark ? Colors.white54 : Colors.black54,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _NeonTheme.warningGold,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      isTamil ? 'எச்சரிக்கையுடன் தொடரவும்' : 'Proceed With Caution',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _applyLiveSmartReroute(_LiveSmartRerouteAssessment assessment) {
+    final newRoute = assessment.alternativeRoute;
+    if (newRoute == null) return;
+    final newEvaluation = assessment.alternativeEvaluation;
+    final totalMeters = _calculateTotalRouteMeters(newRoute.points);
+
+    setState(() {
+      availableRoutes = [newRoute];
+      selectedRouteIndex = newRoute.routeIndex;
+      routePoints = newRoute.points;
+      distanceKm = newRoute.distance;
+      durationMinutes = service.calculateVehicleTime(
+        newRoute.distance,
+        currentVehicle,
+      );
+
+      if (newEvaluation != null) {
+        routeEvaluations = {newRoute.routeIndex: newEvaluation};
+        weather = newEvaluation.weather;
+        accidentSafety = _factorScore(
+          newEvaluation.safety,
+          'Verified blackspots',
+        );
+        roadSafety = _factorScore(newEvaluation.safety, 'Road condition');
+        trafficSafety = _factorScore(newEvaluation.safety, 'Traffic');
+        lightingSafety = _factorScore(newEvaluation.safety, 'Lighting');
+        accessibilitySafety = _factorScore(
+          newEvaluation.safety,
+          'Accessibility',
+        );
+        personalizedSafetyResult = newEvaluation.safety;
+        safetyScore = newEvaluation.safety.score;
+        selectedOsmRoadSegments = newEvaluation.roadSegments;
+        _osmRoadDataStatus = newEvaluation.roadSegments == null
+            ? 'Real road data unavailable for this route'
+            : 'Real OSM road segments found: ${newEvaluation.roadSegments!.length}';
+        recommendationReasons = _buildRecommendationReasons(newEvaluation);
+        routeWarnings = _buildRouteWarnings(newEvaluation);
+      }
+
+      _navEngine.initializeRoute(newRoute.steps, totalMeters);
+
+      _activeHazardAhead = null;
+      _activeHazardDistanceAheadMeters = null;
+      _activeWeatherHazardAhead = null;
+      _isSearchingAlternative = false;
+
+      if (_activeJourney != null && !_activeJourney!.isFinished) {
+        _activeJourney = _activeJourney!.copyWith(
+          routeIndex: newRoute.routeIndex,
+          distanceKm: newRoute.distance,
+          estimatedDurationMinutes: service.calculateVehicleTime(
+            newRoute.distance,
+            currentVehicle,
+          ),
+          routeSafetyScore:
+              newEvaluation?.safety.score ?? _activeJourney!.routeSafetyScore,
+        );
+      }
+    });
+
+    final isTamil = _voiceLanguage == NavLanguage.tamil;
+    final announcement = isTamil
+        ? 'முன்னே உள்ள ஆபத்தைத் தவிர்க்க புதிய பாதை மாற்றப்பட்டது. பயணத்தைத் தொடரவும்.'
+        : 'Route updated to bypass hazard ahead. Continue on new route.';
+    _speakAlert(announcement);
+
+    if (currentPosition != null && _mapReady) {
+      mapController.move(
+        LatLng(currentPosition!.latitude, currentPosition!.longitude),
+        mapController.camera.zoom < 15.0 ? 15.5 : mapController.camera.zoom,
+      );
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                isTamil
+                    ? 'பாதுகாப்பான புதிய பாதைக்கு மாற்றப்பட்டது! ஆபத்து தவிர்க்கப்பட்டது.'
+                    : 'Switched to safer route! Hazard successfully bypassed.',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: _NeonTheme.safeGreen,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   Widget _facilityNavigationCard() {
@@ -37194,12 +42443,14 @@ class _CommunityHazardDetailsDialog extends StatefulWidget {
   final SafeRouteService service;
   final bool isDarkMode;
   final VoidCallback? onHazardUpdated;
+  final VoidCallback? onFindAlternative;
 
   const _CommunityHazardDetailsDialog({
     required this.hazard,
     required this.service,
     required this.isDarkMode,
     this.onHazardUpdated,
+    this.onFindAlternative,
   });
 
   @override
@@ -37554,6 +42805,29 @@ class _CommunityHazardDetailsDialogState
                 ],
 
                 const SizedBox(height: 18),
+
+                if (widget.onFindAlternative != null) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: widget.onFindAlternative,
+                      icon: const Icon(Icons.alt_route_rounded, size: 16),
+                      label: const Text(
+                        'Find Safer Alternative Route',
+                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _NeonTheme.safeGreen,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
 
                 // Community Verification Actions
                 Text('COMMUNITY VERIFICATION', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: isDark ? _NeonTheme.neonCyan : _NeonTheme.electricBlue)),

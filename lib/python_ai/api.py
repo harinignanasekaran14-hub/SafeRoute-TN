@@ -1452,6 +1452,13 @@ HAZARD_CATEGORIES = {
         "reconfirm_days": None,
         "ttl_hours": 8,
     },
+    "landslide_hazard": {
+        "title": "Landslide / rockfall",
+        "icon": "landslide",
+        "is_permanent": False,
+        "reconfirm_days": None,
+        "ttl_hours": 48,
+    },
 }
 
 _REPORT_RATE_LIMITS = {}  # session_id -> list of datetime
@@ -1497,6 +1504,8 @@ def normalize_hazard_category(cat_str):
         return "unsafe_pedestrian_crossing"
     if "accident" in s or "hazard" in s or "crash" in s:
         return "accident_hazard"
+    if "landslide" in s or "rockfall" in s or "mudslide" in s or "rock slide" in s:
+        return "landslide_hazard"
     return None
 
 
@@ -2292,8 +2301,11 @@ def get_my_road_reports():
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
-@app.route("/route-hazard-reroute-check", methods=["POST"])
+@app.route("/route-hazard-reroute-check", methods=["POST", "OPTIONS"])
 def check_route_hazard_reroute():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+
     try:
         data = request.get_json(silent=True) or {}
         curr_pts = data.get("current_route_points") or []
@@ -2326,6 +2338,27 @@ def check_route_hazard_reroute():
                 "success": False,
                 "error": "current_route_points is required and must not be empty",
             }), 400
+
+        # If current_position provided, slice curr_parsed to path ahead
+        curr_pos = data.get("current_position")
+        if isinstance(curr_pos, dict):
+            raw_c_lat = curr_pos.get("lat") or curr_pos.get("latitude")
+            raw_c_lon = curr_pos.get("lon") or curr_pos.get("longitude")
+            if raw_c_lat is not None and raw_c_lon is not None:
+                try:
+                    c_lat = float(raw_c_lat)
+                    c_lon = float(raw_c_lon)
+                    closest_idx = 0
+                    min_d = float("inf")
+                    for idx, pt in enumerate(curr_parsed):
+                        d = haversine_distance(c_lat, c_lon, pt[0], pt[1])
+                        if d < min_d:
+                            min_d = d
+                            closest_idx = idx
+                    if closest_idx < len(curr_parsed):
+                        curr_parsed = [(c_lat, c_lon)] + curr_parsed[closest_idx:]
+                except (ValueError, TypeError):
+                    pass
 
         init_feedback_db()
         with sqlite3.connect(FEEDBACK_DB_PATH) as conn:
@@ -2378,6 +2411,60 @@ def check_route_hazard_reroute():
             if d_alt is not None and d_alt <= 800.0 and status == "Confirmed":
                 alt_confirmed_hazards.append(rep)
 
+        # Severe weather risk indication along remaining route corridor
+        weather_hazards = []
+        try:
+            sampled_wps = sample_route_waypoints(curr_parsed, max_samples=3)
+            max_rain = 0.0
+            min_vis = None
+            max_wind = 0.0
+            for wp in sampled_wps:
+                w = fetch_open_meteo_weather(wp["latitude"], wp["longitude"])
+                if w.get("available"):
+                    rain = float(w.get("precipitation_mm") or 0.0)
+                    vis = w.get("visibility_m")
+                    wind = float(w.get("wind_speed_kmh") or 0.0)
+                    if rain > max_rain:
+                        max_rain = rain
+                    if vis is not None and (min_vis is None or vis < min_vis):
+                        min_vis = vis
+                    if wind > max_wind:
+                        max_wind = wind
+
+            if max_rain >= 15.0:
+                weather_hazards.append({
+                    "type": "severe_weather",
+                    "condition": "Heavy Rain",
+                    "severity": "High" if max_rain >= 25.0 else "Medium",
+                    "description": f"Heavy rainfall up to {max_rain:.1f} mm/h along route corridor.",
+                    "source": "Open-Meteo Weather API",
+                    "status": "Weather Alert",
+                    "rain_mm": round(max_rain, 1),
+                })
+            elif max_rain >= 5.0:
+                weather_hazards.append({
+                    "type": "severe_weather",
+                    "condition": "Moderate Rain",
+                    "severity": "Medium",
+                    "description": f"Steady rain up to {max_rain:.1f} mm/h along route.",
+                    "source": "Open-Meteo Weather API",
+                    "status": "Weather Advisory",
+                    "rain_mm": round(max_rain, 1),
+                })
+
+            if min_vis is not None and min_vis < 1000.0:
+                weather_hazards.append({
+                    "type": "severe_weather",
+                    "condition": "Low Visibility",
+                    "severity": "Medium",
+                    "description": f"Visibility reduced to {int(min_vis)}m along route.",
+                    "source": "Open-Meteo Weather API",
+                    "status": "Weather Advisory",
+                    "visibility_m": min_vis,
+                })
+        except Exception:
+            pass
+
         can_reroute = False
         reason = ""
         avoided_count = 0
@@ -2416,6 +2503,7 @@ def check_route_hazard_reroute():
             "alternative_confirmed_hazards": alt_confirmed_hazards,
             "pending_hazards": pending_hazards,
             "disputed_hazards": disputed_hazards,
+            "weather_hazards": weather_hazards,
             "distance_diff_km": round(alt_dist - curr_dist, 2) if (alt_dist > 0 and curr_dist > 0) else None,
             "duration_diff_minutes": round(alt_dur - curr_dur, 1) if (alt_dur > 0 and curr_dur > 0) else None,
         })
